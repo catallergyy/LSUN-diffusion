@@ -79,8 +79,11 @@ The older STL-10 version of the same idea is in `../` (root-level scripts) and `
   Watermark bits `b`: `randint(0,2,(1,4096))` with seed `wmark_seed=123`.
 - **Epoch 0 (normal training only):** accumulate `|grad|` of the target layer over all batches.
   At the end of epoch 0, sort the weights by their accumulated gradient and take the first `wmark_m` as the embedding positions.
-  - `SORT=False` → `torch.sort(descending=False)` → **the weights with the smallest gradients** are chosen
-    (weights that matter least for the main task, so the watermark should hurt quality less) ❓ Claude assumes this is intentional.
+  - `SORT` is an **experiment switch** (confirmed by the user). The research compares how the gradient size of the
+    chosen weights affects watermark embedding:
+    - `SORT=False` → `torch.sort(descending=False)` → **the smallest-gradient weights** (the current setting, intended)
+    - `SORT=True` → **the largest-gradient weights**
+    Keep this option; never hard-code one direction.
   - ⚠️ Some comments don't match the code: one says "降順ソート" (descending), and others say odd-numbered indices / "×2 capacity",
     but the code takes the first `m` in a row.
   - Saves `watermarked_model.pth` = {model weights *at the end of epoch 0*, indices, secret key, layer name}.
@@ -122,7 +125,7 @@ The older STL-10 version of the same idea is in `../` (root-level scripts) and `
 5. Note: FID with 1000 reference images is still noisy. It is good for comparing runs, but not comparable to numbers in papers.
 
 ## 7. Questions for the user ❓
-- Is choosing the *smallest*-gradient weights (`SORT=False`) intended?
+- ~~Is choosing the *smallest*-gradient weights (`SORT=False`) intended?~~ → **Yes.** `SORT` is an experiment option for comparing small vs. large gradients (answered 2026-11-24).
 - Is `lambda_=0` / 1 epoch a baseline run, or a mistake?
 - Is it OK that `cats_vs_dogs` (possibly with dogs) is used as the "cat" class instead of LSUN cat?
 - Where do the `fid_stats_lsun_*.npz` files come from?
