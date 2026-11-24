@@ -13,7 +13,9 @@ This file records how Claude understands this project and the user's instruction
 2. **Explain before changing.** Propose the plan first and wait for "yes" before editing code.
 3. **Don't commit large files.** Data, images, checkpoints (`*.pt`, `*.pth`) and `*.npz` stay local (`.gitignore`).
 4. Write in simple English. Code comments in this project are in Japanese, so keep that style.
-5. Current priority: **evaluation and training take too long** (FID evaluation took about 40 h). Make it faster without breaking the research.
+5. Current priorities:
+   - **Generate clearer images** (better FID). The watermark is off (`lambda_=0`) for now.
+   - **Evaluation and training take too long** (FID evaluation took about 40 h). Make them faster without breaking the research.
 
 ---
 
@@ -90,8 +92,10 @@ The older STL-10 version of the same idea is in `../` (root-level scripts) and `
     The bit pattern itself is not saved; it is regenerated from the seed.
 - **Epoch ≥ 1:** loss = `MSE + lambda_ * BCE(sigmoid(w_selected · K), b)`.
 - Extraction / detection: `sigmoid(w_selected · K) > 0.5` should equal `b` ❓ The detection scripts (`../detection*.py`) have not been read yet.
-- ⚠️ Current settings disable the watermark: `lambda_ = 0`, and `num_epochs = 1` means no epoch ≥ 1 ever runs.
-  Claude assumes this is a **baseline run (no watermark)** ❓
+- `lambda_ = 0` **on purpose** (confirmed by the user): the **current goal is clearer generated images**,
+  so the watermark is off for now. Don't change `lambda_` unless asked.
+- The number of epochs must be **flexible** (easy to change per run). Earlier runs used **600 epochs**.
+  (`num_epochs = 1` in the code was only a short test.)
 
 ### 4.5 Evaluation (`evaluate_and_calculate_fid`)
 - Generates images (50% bedroom, 50% cat), saves them as PNG, runs pytorch-fid against `./fid_ref_lsun` (all 1000 real images), then deletes the generated images.
@@ -126,6 +130,6 @@ The older STL-10 version of the same idea is in `../` (root-level scripts) and `
 
 ## 7. Questions for the user ❓
 - ~~Is choosing the *smallest*-gradient weights (`SORT=False`) intended?~~ → **Yes.** `SORT` is an experiment option for comparing small vs. large gradients (answered 2026-11-24).
-- Is `lambda_=0` / 1 epoch a baseline run, or a mistake?
+- ~~Is `lambda_=0` / 1 epoch a baseline run, or a mistake?~~ → **On purpose.** The goal now is image quality; epochs should be flexible (600 used before) (answered 2026-11-24).
 - Is it OK that `cats_vs_dogs` (possibly with dogs) is used as the "cat" class instead of LSUN cat?
 - Where do the `fid_stats_lsun_*.npz` files come from?
