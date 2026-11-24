@@ -117,54 +117,70 @@ def accumulate_gradients(model,grad_accumulator):
             if name not in grad_accumulator:
                 grad_accumulator[name] = 0.0
             grad_accumulator[name] += grad_magnitude
-def generate_with_cfg_batch(model, scheduler, x, labels, guidance_scale, null_label, 
-                            device, show_progress=False, desc="Generating"):
+def make_sampling_scheduler(train_scheduler):
+    """学習用DDPMスケジューラと同じノイズスケジュールで、高速なDPM-Solver++を作る（再学習不要）"""
+    return DPMSolverMultistepScheduler.from_config(train_scheduler.config, algorithm_type="dpmsolver++")
+
+
+def generate_with_cfg_batch(model, scheduler, x, labels, guidance_scale, null_label,
+                            device, show_progress=False, desc="Generating",
+                            num_inference_steps=None):
     """
     Classifier-Free Guidanceを使用してバッチ生成
+    - num_inference_steps を指定すると scheduler.set_timesteps() を呼ぶ（DPM-Solverなら25〜50で十分）
+      指定しなければ scheduler.timesteps をそのまま使う（DDPMなら1000ステップ）
+    - cond と uncond を1回のforwardにまとめて計算（モデル呼び出し回数が半分）
+    - CUDAではbf16 autocastで高速化（スケジューラの計算はfp32のまま）
     """
+    if num_inference_steps is not None:
+        scheduler.set_timesteps(num_inference_steps, device=device)  # DPM-Solverの内部状態もリセットされる
+    use_cfg = guidance_scale > 1.0
+    if use_cfg:
+        null_labels = torch.full_like(labels, null_label)
+        labels_in = torch.cat([labels, null_labels])
+    else:
+        labels_in = labels
+
     iterator = tqdm(scheduler.timesteps, desc=desc) if show_progress else scheduler.timesteps
-    
+    use_amp = (device.type == "cuda") if isinstance(device, torch.device) else str(device).startswith("cuda")
+
     for t in iterator:
-        with torch.no_grad():
-            # Conditional prediction
-            noise_pred_cond = model(x, t, class_labels=labels).sample
-            
-            if guidance_scale > 1.0:
-                # Unconditional prediction
-                null_labels = torch.full_like(labels, null_label)
-                noise_pred_uncond = model(x, t, class_labels=null_labels).sample
-                
-                # CFG
-                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
-            else:
-                noise_pred = noise_pred_cond
-            
-            # デノイズステップ
-            x = scheduler.step(noise_pred, t, x).prev_sample
-    
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+            x_in = torch.cat([x, x]) if use_cfg else x
+            out = model(x_in, t, class_labels=labels_in).sample.float()
+        if use_cfg:
+            noise_pred_cond, noise_pred_uncond = out.chunk(2)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
+        else:
+            noise_pred = out
+        # デノイズステップ
+        x = scheduler.step(noise_pred, t, x).prev_sample
+
     return x
 
 
-def generate_samples_with_cfg(model, scheduler, device, num_samples_per_class=4, 
-                              guidance_scale=3.0, null_label=2):
+def generate_samples_with_cfg(model, scheduler, device, num_samples_per_class=4,
+                              guidance_scale=3.0, null_label=2, num_inference_steps=50):
     """
-    各クラスからサンプルを生成（CFG使用）
+    各クラスからサンプルを生成（CFG使用, DPM-Solver++）
     """
+    sample_scheduler = make_sampling_scheduler(scheduler)
     all_samples = []
-    
+
     for class_id in [0, 1]:
-        x = torch.randn(num_samples_per_class, 3, 96, 96).to(device)
+        x = torch.randn(num_samples_per_class, 3, 256, 256).to(device)
         labels = torch.tensor([class_id] * num_samples_per_class).to(device)
-        
+
         x = generate_with_cfg_batch(
-            model, scheduler, x, labels,
+            model, sample_scheduler, x, labels,
             guidance_scale=guidance_scale,
             null_label=null_label,
-            device=device
+            device=device,
+            num_inference_steps=num_inference_steps,
         )
-        
+
         all_samples.extend(x)
-    
+
     return all_samples
 
 
@@ -254,7 +270,8 @@ def verify_data_normalization(train_loader):
     
     
 #pytorch_fidを使用したfid関数ISは無視,FIDの計算とテスト生成を合体
-def evaluate_and_calculate_fid(model, scheduler, device, save_dir, original_folder_path, guidance_scale, null_label):
+def evaluate_and_calculate_fid(model, scheduler, device, save_dir, original_folder_path, guidance_scale, null_label,
+                               num_samples=2000, gen_batch_size=16, num_inference_steps=50):
     print("\n" + "="*60)
     print("Final Generation & FID Calculation (pytorch-fid)")
     print("="*60)
@@ -262,9 +279,9 @@ def evaluate_and_calculate_fid(model, scheduler, device, save_dir, original_fold
     model.eval()
     torch.cuda.empty_cache()
     
-    # 生成する総枚数
-    num_samples = 100
-    gen_batch_size = 10
+    # 高速サンプラー（DDPM 1000ステップ → DPM-Solver++ num_inference_steps ステップ）
+    sample_scheduler = make_sampling_scheduler(scheduler)
+    print(f"Sampler: DPM-Solver++ {num_inference_steps} steps, {num_samples} images, CFG={guidance_scale}")
     
     # 画像を保存する一時ディレクトリ
     gen_folder_path = f"{save_dir}/fid_generated_images"
@@ -276,18 +293,19 @@ def evaluate_and_calculate_fid(model, scheduler, device, save_dir, original_fold
     img_counter = 0
     with torch.no_grad():
         with tqdm(total=num_samples, desc="Generating evaluation images") as pbar:
-            for _ in range(num_samples // gen_batch_size):
+            for _ in range((num_samples + gen_batch_size - 1) // gen_batch_size):
                 x = torch.randn(gen_batch_size, 3, 256, 256).to(device)
-                # クラス0 (bedroom) と クラス1 (cat) を半々に割り当て
-                labels_gen = torch.randint(0, 2, (gen_batch_size,)).to(device)
+                # クラス0 (bedroom) と クラス1 (cat) をちょうど半々に割り当て
+                labels_gen = ((torch.arange(gen_batch_size) + img_counter) % 2).to(device)
                 
                 # 条件付き生成
                 x_gen = generate_with_cfg_batch(
-                    model, scheduler, x, labels_gen,
+                    model, sample_scheduler, x, labels_gen,
                     guidance_scale=guidance_scale,
                     null_label=null_label,
                     device=device,
-                    show_progress=False
+                    show_progress=False,
+                    num_inference_steps=num_inference_steps,
                 )
                 
                 # 生成画像を1枚ずつ保存＆仕分け
@@ -297,7 +315,7 @@ def evaluate_and_calculate_fid(model, scheduler, device, save_dir, original_fold
                     
                     # FID計算用のフォルダに個別保存（pytorch-fidはフォルダ内の画像を読み込むため）
                     # LSUNfunc.save_images_locallyの仕様に合わせて調整してください
-                    single_img_path = os.path.join(gen_folder_path, f"img_{img_counter:04d}.png")
+                    single_img_path = os.path.join(gen_folder_path, f"img_{img_counter:05d}.png")
                     torchvision.utils.save_image(img_cpu, single_img_path, normalize=True, value_range=(-1, 1))
                     
                     # 最終チェック用（各クラス最大16枚キープ）
