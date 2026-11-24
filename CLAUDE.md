@@ -55,9 +55,9 @@ The older STL-10 version of the same idea is in `../` (root-level scripts) and `
 ### 4.1 Data
 - `DatasetFolder("./dataset/val_256")` → classes sorted alphabetically: **bedroom = 0, cat = 1**.
 - Normalized to [-1, 1]. Batch size 16.
-- ⚠️ **The "cat" images do not come from LSUN.** `LSUNdataloader.py` takes the first 500 images of the HF dataset `cats_vs_dogs`
-  **without filtering by label**, so the cat folder may contain **dogs** ❓ This should be checked.
-  The bedroom images come from `pcuenq/lsun-bedrooms`.
+- The bedroom images come from `pcuenq/lsun-bedrooms`. The **cat images are real LSUN cat images that the user collected from the web**
+  (confirmed by the user). The data is fine; don't change it.
+  (`download_lsun_samples_from_hf` still contains a `cats_vs_dogs` download, but that is not where the current cat data came from.)
 - The dataset is small (1000 images). It is the same set used for training and for the FID reference.
 
 ### 4.2 Model (`LSUNfunc.create_model`)
@@ -125,11 +125,11 @@ The older STL-10 version of the same idea is in `../` (root-level scripts) and `
 1. User runs the short test above and reports the time and any errors.
 2. **Step 2:** change the UNet to remove attention at 128 px (keep it at ≤32 px only) and use bigger heads → retrain. Old checkpoints will not load into the new architecture.
 3. Merge the duplicated training loop (epoch 0 vs. epoch ≥ 1).
-4. Check that the cat data contains only cats.
+4. ~~Check the cat data~~ (OK: the user confirmed it is real LSUN cat images).
 5. Note: FID with 1000 reference images is still noisy. It is good for comparing runs, but not comparable to numbers in papers.
 
 ## 7. Questions for the user ❓
 - ~~Is choosing the *smallest*-gradient weights (`SORT=False`) intended?~~ → **Yes.** `SORT` is an experiment option for comparing small vs. large gradients (answered 2026-11-24).
 - ~~Is `lambda_=0` / 1 epoch a baseline run, or a mistake?~~ → **On purpose.** The goal now is image quality; epochs should be flexible (600 used before) (answered 2026-11-24).
-- Is it OK that `cats_vs_dogs` (possibly with dogs) is used as the "cat" class instead of LSUN cat?
+- ~~Is it OK that `cats_vs_dogs` is used as the "cat" class?~~ → **The cat data is real LSUN cat images collected by the user. It's OK** (answered 2026-11-24).
 - Where do the `fid_stats_lsun_*.npz` files come from?
