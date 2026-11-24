@@ -24,6 +24,7 @@ def main():
     parser.add_argument("--null-label", type=int, default=2)
     parser.add_argument("--data-dir", default="./dataset/val_256")
     parser.add_argument("--arch", default=None, help="v1 / v2 (default: read from checkpoint, old checkpoints = v1)")
+    parser.add_argument("--no-ema", action="store_true", help="EMA重みがあっても通常の重みを使う")
     parser.add_argument("--out-dir", default=None, help="default: <ckpt dir>/eval_<timestamp>")
     args = parser.parse_args()
 
@@ -31,7 +32,9 @@ def main():
     state = torch.load(args.ckpt, map_location="cpu")
     arch = args.arch or state.get("arch", "v1")  # 古いチェックポイントには"arch"がない = v1
     model, _, _, scheduler = LSUNfunc.create_model(1e-4, arch=arch)
-    model.load_state_dict(state["model_state_dict"])
+    use_ema = "ema_state_dict" in state and not args.no_ema
+    model.load_state_dict(state["ema_state_dict"] if use_ema else state["model_state_dict"])
+    print(f"Using {'EMA' if use_ema else 'raw'} weights")
     model.to(device)
 
     LSUNfunc.build_fid_reference(args.data_dir, LSUNfunc.FID_REF_DIR)
@@ -54,7 +57,7 @@ def main():
     )
     elapsed = time.time() - start
 
-    msg = (f"ckpt={args.ckpt}\nFID={fid_score}\nnum_samples={args.num_samples} steps={args.steps} "
+    msg = (f"ckpt={args.ckpt}\nweights={'EMA' if use_ema else 'raw'}\nFID={fid_score}\nnum_samples={args.num_samples} steps={args.steps} "
            f"cfg={args.cfg}\ntime={elapsed/60:.1f} min\n")
     print("\n" + msg)
     with open(os.path.join(out_dir, "fid_result.txt"), "w", encoding="utf-8") as f:

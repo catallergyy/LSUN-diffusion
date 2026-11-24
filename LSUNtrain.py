@@ -5,6 +5,7 @@
 ##   python3 LSUNtrain.py --epochs 600 --resume content/runs/2026-11-24/checkpoint_latest.pt   # 途中から再開
 ##   python3 LSUNtrain.py --help                                                             # 全オプション
 import argparse
+import copy
 import datetime
 import os
 import time
@@ -29,6 +30,9 @@ def parse_args():
     # CFG
     p.add_argument("--cfg", type=float, default=3.0, help="guidance scale (評価・サンプル生成時)")
     p.add_argument("--cfg-dropout", type=float, default=0.1)
+    # EMA
+    p.add_argument("--ema-decay", type=float, default=0.9995,
+                   help="EMA重みの減衰率。サンプル生成とFIDはEMA重みを使う")
     # 保存・確認
     p.add_argument("--save-every", type=int, default=50, help="N epochごとにチェックポイント保存")
     p.add_argument("--sample-every", type=int, default=25, help="N epochごとにサンプル画像を保存")
@@ -99,6 +103,8 @@ def main():
     model, loss_fn, optimizer, scheduler = LSUNfunc.create_model(lr, arch=args.arch)
     model.to(device)
     loss_fn.to(device)
+    # EMA重み（重みの移動平均）: 生成画像がより綺麗・安定になる。生成・FIDにはこちらを使う
+    ema_model = copy.deepcopy(model).eval().requires_grad_(False)
     bce_loss = torch.nn.BCELoss()
     #============ 透かし埋め込み層 =============
     layer_path = LSUNfunc.watermark_layer_path(model)  # 最後のup blockの最後のconv2（v1: up_blocks.3, v2: up_blocks.5）
@@ -117,6 +123,7 @@ def main():
 
     if resume_state is not None:
         model.load_state_dict(resume_state["model_state_dict"])
+        ema_model.load_state_dict(resume_state["ema_state_dict"])
         optimizer.load_state_dict(resume_state["optimizer_state_dict"])
         start_epoch = resume_state["epoch"] + 1
         top_indices = resume_state["watermark_indices"]
@@ -133,6 +140,7 @@ def main():
             "epoch": epoch,
             "arch": args.arch,
             "model_state_dict": model.state_dict(),
+            "ema_state_dict": ema_model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "watermark_indices": top_indices.cpu() if top_indices is not None else None,
             "secret_key": key.cpu(),
@@ -206,6 +214,7 @@ def main():
                             accumulated_grad[name] += param.grad.abs()
 
                 optimizer.step()
+                LSUNfunc.update_ema(ema_model, model, args.ema_decay, current_steps)
 
                 epoch_normal_loss += normal_loss.item()
                 epoch_loss += total_loss.item()
@@ -273,7 +282,7 @@ def main():
         # N epochごとのサンプル画像（品質の確認用）
         if (epoch + 1) % args.sample_every == 0 or epoch + 1 == num_epochs:
             path = f"{save_dir}/samples/epoch_{epoch+1:04d}.png"
-            save_samples(model, scheduler, device, args, null_label, path)
+            save_samples(ema_model, scheduler, device, args, null_label, path)
             print(f"  ✓ Samples saved to {path}")
 
     # ========== 学習完了 ==========
@@ -298,7 +307,7 @@ def main():
     fid_score, inception_score = None, 0.0
     if args.fid_samples > 0:
         fid_score, inception_score = LSUNfunc.evaluate_and_calculate_fid(
-            model=model,
+            model=ema_model,
             scheduler=scheduler,
             device=device,
             save_dir=save_dir,
@@ -321,6 +330,7 @@ Batch Size   : {args.batch_size}
 Learning Rate: {lr}
 Arch         : {args.arch}
 CFG scale    : {guidance_scale}
+EMA decay    : {args.ema_decay}
 SORT         : {SORT}
 Watermark M  : {LSUNembedding.wmark_m} (weights)
 Watermark Dim: {LSUNembedding.wmark_dim}
@@ -332,7 +342,7 @@ number of parameters : {num_weights}
 Training time: {hours:02d}h {minutes:02d}m {seconds:02d}s
 
 [Results]
-FID          :{fid_score}  ({args.fid_samples} samples, DPM-Solver++ {args.sample_steps} steps)
+FID          :{fid_score}  (EMA weights, {args.fid_samples} samples, DPM-Solver++ {args.sample_steps} steps)
 IS           :{inception_score}
 保存場所      :{save_dir}
 [Model File]

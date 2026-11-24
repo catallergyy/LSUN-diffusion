@@ -125,6 +125,17 @@ def save_images_locally(images,path):
     
     print(f"saved {len(images)} images to {path}")
 
+@torch.no_grad()
+def update_ema(ema_model, model, decay, step):
+    """EMA（指数移動平均）重みの更新: ema = d*ema + (1-d)*model
+    学習初期は d を小さくして早く追従させる（step が増えると decay に近づく）"""
+    d = min(decay, (1 + step) / (10 + step))
+    for p_ema, p in zip(ema_model.parameters(), model.parameters()):
+        p_ema.lerp_(p, 1 - d)
+    for b_ema, b in zip(ema_model.buffers(), model.buffers()):
+        b_ema.copy_(b)
+
+
 def accumulate_gradients(model,grad_accumulator):
     """毎ステップ呼び出して、勾配の大きさを蓄積する"""
     for name, param in model.named_parameters():
