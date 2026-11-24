@@ -1,0 +1,11 @@
+# large data / outputs (not tracked)
+archive/
+content/
+dataset/
+LSUN_origin/
+original_images_lsun/
+*.npz
+*.pt
+*.pth
+__pycache__/
+wandb/
