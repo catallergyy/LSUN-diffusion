@@ -11,7 +11,7 @@ import datetime
 import wandb
 
 def main():
-    original_folder_path="./original_images_lsun"
+    original_folder_path=LSUNfunc.FID_REF_DIR
     device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
     key=LSUNembedding.generate_secret_key(LSUNembedding.wmark_m , LSUNembedding.wmark_dim, LSUNembedding.w_key_seed,device).to(device)
     wmark=LSUNembedding.generate_watermark_pattern(LSUNembedding.wmark_dim, LSUNembedding.wmark_seed,device).to(device)

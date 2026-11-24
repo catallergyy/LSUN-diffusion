@@ -9,3 +9,4 @@ original_images_lsun/
 *.pth
 __pycache__/
 wandb/
+fid_ref_lsun/

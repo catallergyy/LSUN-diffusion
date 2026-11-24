@@ -269,6 +269,24 @@ def generate_samples_with_cfg(model, scheduler, device, num_samples_per_class=4,
     return all_samples
 
 
+FID_REF_DIR = "./fid_ref_lsun"
+
+def build_fid_reference(data_dir, ref_dir=FID_REF_DIR):
+    """data_dir/<class>/ の画像を全クラス分 ref_dir にフラットにコピー（pytorch-fidはサブフォルダを読まないため）"""
+    if os.path.exists(ref_dir) and len(os.listdir(ref_dir)) > 0:
+        print(f"FID reference images already exist in {ref_dir} ({len(os.listdir(ref_dir))} images)")
+        return
+    os.makedirs(ref_dir, exist_ok=True)
+    for class_name in sorted(os.listdir(data_dir)):
+        class_dir = os.path.join(data_dir, class_name)
+        if not os.path.isdir(class_dir):
+            continue
+        for fname in os.listdir(class_dir):
+            if fname.lower().endswith((".jpg", ".jpeg", ".png")):
+                shutil.copy(os.path.join(class_dir, fname), os.path.join(ref_dir, f"{class_name}_{fname}"))
+    print(f"Saved {len(os.listdir(ref_dir))} FID reference images to {ref_dir}")
+
+
 def load_data(batch_size=64, data_dir="./dataset/val_256"):
     """
     LSUNデータセット（bedroom と cat の2クラス）をロードする
@@ -288,11 +306,6 @@ def load_data(batch_size=64, data_dir="./dataset/val_256"):
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
     ])
     
-    # 保存用の変換（[0, 1]のまま・FID計算用や可視化用）
-    save_transform = transforms.Compose([
-        transforms.ToTensor()
-    ])
-    
     # ImageFolder を使ってデータセットを読み込み
     # （ImageFolderはサブディレクトリ名を自動的にクラス 0, 1 に割り当てます）
     dataset = torchvision.datasets.DatasetFolder(
@@ -305,28 +318,9 @@ def load_data(batch_size=64, data_dir="./dataset/val_256"):
     print(f"  Classes found: {dataset.classes}")  # 例: ['bedroom', 'cat']
     print(f"  Total samples: {len(dataset)}")
     
-    # FID計算用のオリジナル画像保存（まだ保存されていなければ）
-    original_images_path = "./original_images_lsun"
-    if not os.path.exists(original_images_path) or len(os.listdir(original_images_path)) == 0:
-        print(f"\nSaving original images to {original_images_path}...")
-        os.makedirs(original_images_path, exist_ok=True)
-        
-        # 一時的に保存用の変換（正規化なし）に切り替え
-        dataset.transform = save_transform
-        
-        sample_images = []
-        # 最初から数枚（例: 100枚）を保存用として抽出
-        for idx in range(min(100, len(dataset))):
-            img, label = dataset[idx]
-            sample_images.append(img)
-            
-        save_images_locally(sample_images, original_images_path)
-        
-        # 学習用の変換に戻す
-        dataset.transform = train_transform
-        print("Original images saved successfully!")
-    else:
-        print(f"Original images already exist in {original_images_path}")
+    # FID計算用の参照画像フォルダ（bedroom と cat の両クラスを全て含める）
+    # 旧版は先頭100枚(=全部bedroom)だけだったので、生成画像(半分cat)と比較できていなかった
+    build_fid_reference(data_dir, FID_REF_DIR)
     
     # DataLoaderの作成
     train_loader = DataLoader(
