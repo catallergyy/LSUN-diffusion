@@ -48,62 +48,93 @@ The older STL-10 version of the same idea is in `../` (root-level scripts) and `
 | `content/runs/<date>/` | Outputs: checkpoints, loss graphs, sample images, `training_log.txt`. |
 | `archive/` | Old material (9.5 GB, not tracked). |
 
+### How to run (inside the devcontainer `charming_tu`, path `/workspaces/research/diffusion-model/LSUN`)
+The host Python has no `diffusers`; always run inside the container, e.g.
+`docker exec -w /workspaces/research/diffusion-model/LSUN charming_tu python3 ...`
+GPU: NVIDIA GB10 (PyTorch warns that capability 12.1 > 12.0, but it works).
+
+```
+python3 LSUNtrain.py --epochs 600                         # normal training (lambda_=0)
+python3 LSUNtrain.py --epochs 600 --sort                  # SORT=True (largest-gradient weights)
+python3 LSUNtrain.py --epochs 800 --resume content/runs/<date>/checkpoint_latest.pt   # continue a run
+python3 eval_fid.py content/runs/<date>/checkpoint_ep0600.pt --steps 25 --cfg 2.0     # FID only
+python3 LSUNtrain.py --help                               # all options
+```
+
 ---
 
 ## 4. Pipeline in detail
 
 ### 4.1 Data
 - `DatasetFolder("./dataset/val_256")` → classes sorted alphabetically: **bedroom = 0, cat = 1**.
-- Normalized to [-1, 1]. Batch size 16.
+- Normalized to [-1, 1]. Batch size 16 (`--batch-size`) → 63 batches per epoch.
 - The bedroom images come from `pcuenq/lsun-bedrooms`. The **cat images are real LSUN cat images that the user collected from the web**
   (confirmed by the user). The data is fine; don't change it.
   (`download_lsun_samples_from_hf` still contains a `cats_vs_dogs` download, but that is not where the current cat data came from.)
 - The dataset is small (1000 images). It is the same set used for training and for the FID reference.
 
-### 4.2 Model (`LSUNfunc.create_model`)
-- diffusers `UNet2DModel`, 256×256, `num_class_embeds=3` (0 = bedroom, 1 = cat, **2 = null label for CFG**).
-- Channels (128, 256, 256, 512), 2 ResNet layers per block.
-- Down blocks: `DownBlock2D` (256 px) → `AttnDownBlock2D` (128 px) → `AttnDownBlock2D` (64 px) → `AttnDownBlock2D` (32 px).
-  - ⚠️ **Self-attention at 128×128 = 16,384 tokens.** This is the main reason training and sampling are slow.
-    The config was copied from the 96×96 STL-10 version (the comments still say 96→48).
-  - `attention_head_dim=8` → many tiny heads (inefficient).
+### 4.2 Model (`LSUNfunc.create_model(lr, arch)`)
+- diffusers `UNet2DModel`, 256×256, `num_class_embeds=3` (0 = bedroom, 1 = cat, **2 = null label for CFG**), 2 ResNet layers per block.
+- **`v2` (default, new):** 6 levels 256→128→64→32→16→8, channels (128,128,256,256,512,512),
+  self-attention **only at 16×16** (+ mid block 8×8), head dim 64. 114M params. Close to the DDPM paper's LSUN-256 model.
+- **`v1` (old, kept to load old checkpoints):** 4 levels, attention at 128/64/32 px, head dim 8. 75M params.
+  Copied from the 96×96 STL-10 model; attention at 128×128 (16,384 tokens) made it extremely slow.
+- Checkpoints store `"arch"`; files without it are v1. **v1 and v2 checkpoints are not compatible.**
 - Loss: MSE on the predicted noise. Optimizer: AdamW (lr 1e-4, weight decay 1e-4).
-- `DDPMScheduler`: 1000 steps, linear beta from 1e-4 to 0.02.
+- **LR schedule:** linear warmup 1000 steps (`--warmup-steps`) → cosine decay to 0 at the last step of `--epochs`.
+- **EMA weights** (`--ema-decay 0.9995`): a moving average of the weights. **Samples and FID use the EMA model.**
+  The watermark loss and `watermarked_model.pth` use the raw (non-EMA) weights ❓ when lambda_>0 is used again,
+  check whether detection should be done on the EMA or the raw weights.
+- **bf16 autocast** for the UNet forward (loss, watermark loss and weights stay fp32). `--no-amp` turns it off.
+- `DDPMScheduler` for training: 1000 steps, linear beta from 1e-4 to 0.02.
+- **Sampling:** DPM-Solver++ built from the same DDPM config (`make_sampling_scheduler`), default 50 steps (`--sample-steps`).
 
 ### 4.3 CFG
 - Training: each label is replaced by the null label 2 with probability `cfg_dropout_prob = 0.1`.
 - Sampling: `eps = eps_uncond + s * (eps_cond - eps_uncond)`, `s = guidance_scale = 3.0`.
 
 ### 4.4 Watermark (`LSUNembedding.py` + `LSUNtrain.py`)
-- Target layer: `up_blocks.3.resnets.2.conv2` (last conv of the last up block, 128→128, 3×3 → 147,456 weights).
+- Target layer: **last conv2 of the last up block** (`LSUNfunc.watermark_layer_path`):
+  v1 = `up_blocks.3.resnets.2.conv2`, v2 = `up_blocks.5.resnets.2.conv2`. Both are 128→128, 3×3 → 147,456 weights.
 - `wmark_m = 18000` selected weights, `wmark_dim = 4096` watermark bits.
 - Secret key `K`: `randn(18000, 4096)` with seed `w_key_seed=0`.
   Watermark bits `b`: `randint(0,2,(1,4096))` with seed `wmark_seed=123`.
 - **Epoch 0 (normal training only):** accumulate `|grad|` of the target layer over all batches.
   At the end of epoch 0, sort the weights by their accumulated gradient and take the first `wmark_m` as the embedding positions.
-  - `SORT` is an **experiment switch** (confirmed by the user). The research compares how the gradient size of the
+  - `SORT` (`--sort` flag) is an **experiment switch** (confirmed by the user). The research compares how the gradient size of the
     chosen weights affects watermark embedding:
     - `SORT=False` → `torch.sort(descending=False)` → **the smallest-gradient weights** (the current setting, intended)
     - `SORT=True` → **the largest-gradient weights**
     Keep this option; never hard-code one direction.
-  - ⚠️ Some comments don't match the code: one says "降順ソート" (descending), and others say odd-numbered indices / "×2 capacity",
-    but the code takes the first `m` in a row.
+  - The code takes the first `wmark_m` weights in a row (the old comments about odd-numbered indices / "×2 capacity" were never implemented and are removed).
   - Saves `watermarked_model.pth` = {model weights *at the end of epoch 0*, indices, secret key, layer name}.
     The bit pattern itself is not saved; it is regenerated from the seed.
 - **Epoch ≥ 1:** loss = `MSE + lambda_ * BCE(sigmoid(w_selected · K), b)`.
 - Extraction / detection: `sigmoid(w_selected · K) > 0.5` should equal `b` ❓ The detection scripts (`../detection*.py`) have not been read yet.
 - `lambda_ = 0` **on purpose** (confirmed by the user): the **current goal is clearer generated images**,
   so the watermark is off for now. Don't change `lambda_` unless asked.
-- The number of epochs must be **flexible** (easy to change per run). Earlier runs used **600 epochs**.
-  (`num_epochs = 1` in the code was only a short test.)
+- The number of epochs must be **flexible**: `--epochs N` (default 600). Earlier runs used **600 epochs**.
 
-### 4.5 Evaluation (`evaluate_and_calculate_fid`)
-- Generates images (50% bedroom, 50% cat), saves them as PNG, runs pytorch-fid against `./fid_ref_lsun` (all 1000 real images), then deletes the generated images.
-  Also saves 16 samples per class to `raw_generate_final_check/`.
-- IS is not computed (always 0.0).
-- Logs the hyperparameters and FID to `content/runs/<date>/training_log.txt`.
+### 4.5 Saving and evaluation
+- Output folder: `content/runs/<date>/` (or `--save-dir`). Each epoch: loss graphs, `checkpoint_latest.pt` (for `--resume`),
+  `best_model.pt` (lowest training loss). Every `--save-every 50` epochs: `checkpoint_epNNNN.pt`.
+  Every `--sample-every 25` epochs: `samples/epoch_NNNN.png` (top row bedroom, bottom row cat, EMA weights) → **look at these to see quality improve**.
+- ⚠️ Disk: one checkpoint ≈ 1.8 GB (model + EMA + optimizer). 600 epochs with `--save-every 50` ≈ 25 GB.
+- Final FID (`evaluate_and_calculate_fid`): generates `--fid-samples 2000` images (exactly 50% bedroom / 50% cat) with the EMA model,
+  runs pytorch-fid against `./fid_ref_lsun` (all 1000 real images), then deletes the generated images.
+  Also saves 16 samples per class to `raw_generate_final_check/`. IS is not computed (always 0.0).
+- Logs hyperparameters, training time and FID to `<save_dir>/training_log.txt`.
+- FID with 1000 reference images is noisy: good for comparing runs, but not comparable to numbers in papers.
 
----
+### 4.6 Measured speed (GB10, batch 16, 2026-11-24)
+| | train step | 1 sampling step (16 images with CFG) |
+|---|---|---|
+| v2 + bf16 | **1.9 s** → ~130 s/epoch → **600 epochs ≈ 22 h** | 1.5 s |
+| v2 fp32 | 2.5 s | 1.9 s |
+| v1 (old) + bf16 | > 60 s (benchmark stopped) | — |
+
+- Final FID with 2000 images × 50 steps ≈ 2.6 h. With `--steps 25` (or `--sample-steps 25`) ≈ 1.3 h.
+- The old evaluation (v1, 1000 DDPM steps, 2 forward passes per step) explains the ~40 h.
 
 ## 5. Changes made by Claude (see the GitHub commits)
 
@@ -114,22 +145,27 @@ The older STL-10 version of the same idea is in `../` (root-level scripts) and `
 | `c06d6f8` | Removed TensorFlow, the two unused InceptionV3 models and the unused code; DataLoader `num_workers=4`. |
 | `93e1e54` | Sampling: DPM-Solver++ with 50 steps (instead of 1000 DDPM steps), cond and uncond in one forward pass, bf16. Number of FID samples 100 → 2000 (100 is too few for a valid FID). |
 | `ca510d5` | `eval_fid.py` for evaluating a checkpoint. |
+| `57bc28d` | New UNet architecture **v2** (attention only at 16×16). `v1` is kept for old checkpoints. |
+| `b37958e` | `LSUNtrain.py` refactor: command-line options (`--epochs` …), checkpoints, sample images, `--resume`; the two training loops are merged into one. |
+| `a0e6a4a` | **EMA** weights; samples and FID use them. |
+| `2e905d7` | **LR warmup + cosine decay**. |
+| `c6c8023` | **bf16 autocast** + TF32 for training. |
 
-⚠️ **These changes have not been run yet**: the host Python has no `diffusers` and the GPU was busy. The user should test first:
-`python3 eval_fid.py <ckpt> --num-samples 200 --steps 25`
+✅ Tested on 2026-11-24 in the devcontainer: a 2-epoch run went through training → watermark position selection →
+checkpoints → sample grids → FID → log without errors. (A long run has not been done yet.)
 
 ---
 
 ## 6. Next steps (proposed, not done)
 
-1. User runs the short test above and reports the time and any errors.
-2. **Step 2:** change the UNet to remove attention at 128 px (keep it at ≤32 px only) and use bigger heads → retrain. Old checkpoints will not load into the new architecture.
-3. Merge the duplicated training loop (epoch 0 vs. epoch ≥ 1).
-4. ~~Check the cat data~~ (OK: the user confirmed it is real LSUN cat images).
-5. Note: FID with 1000 reference images is still noisy. It is good for comparing runs, but not comparable to numbers in papers.
+1. User starts a real run: `python3 LSUNtrain.py --epochs 600` and checks `samples/` every 25 epochs.
+2. After training, find the best CFG scale by FID (e.g. 1.5 / 2 / 3 / 5) with `eval_fid.py --cfg`.
+3. Choose the "best model" by FID or the last EMA checkpoint, not by training loss (the diffusion loss barely tells image quality).
+4. Possible further speed-ups (not tried): `torch.compile`, channels_last.
 
 ## 7. Questions for the user ❓
 - ~~Is choosing the *smallest*-gradient weights (`SORT=False`) intended?~~ → **Yes.** `SORT` is an experiment option for comparing small vs. large gradients (answered 2026-11-24).
-- ~~Is `lambda_=0` / 1 epoch a baseline run, or a mistake?~~ → **On purpose.** The goal now is image quality; epochs should be flexible (600 used before) (answered 2026-11-24).
+- ~~Is `lambda_=0` / 1 epoch a baseline run, or a mistake?~~ → **On purpose.** 
+(answered 2026-11-24).
 - ~~Is it OK that `cats_vs_dogs` is used as the "cat" class?~~ → **The cat data is real LSUN cat images collected by the user. It's OK** (answered 2026-11-24).
 - Where do the `fid_stats_lsun_*.npz` files come from?
