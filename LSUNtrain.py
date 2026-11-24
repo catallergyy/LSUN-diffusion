@@ -13,6 +13,7 @@ import time
 import matplotlib.pyplot as plt
 import torch
 import torchvision
+from diffusers.optimization import get_cosine_schedule_with_warmup
 from tqdm import tqdm
 
 import LSUNembedding
@@ -24,6 +25,8 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=600)
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--lr", type=float, default=1e-4)
+    p.add_argument("--warmup-steps", type=int, default=1000,
+                   help="LRを0からlrまで線形に上げるステップ数。その後cosineで0まで下げる")
     p.add_argument("--arch", default=LSUNfunc.DEFAULT_ARCH, choices=list(LSUNfunc.ARCHS))
     p.add_argument("--sort", action="store_true",
                    help="透かし位置: 指定なし=勾配が小さい重み (SORT=False), 指定あり=勾配が大きい重み (SORT=True)")
@@ -103,6 +106,9 @@ def main():
     model, loss_fn, optimizer, scheduler = LSUNfunc.create_model(lr, arch=args.arch)
     model.to(device)
     loss_fn.to(device)
+    # 学習率スケジュール: warmup → cosine減衰（全epochの最後で0）
+    lr_scheduler = get_cosine_schedule_with_warmup(
+        optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=num_epochs * len(train_loader))
     # EMA重み（重みの移動平均）: 生成画像がより綺麗・安定になる。生成・FIDにはこちらを使う
     ema_model = copy.deepcopy(model).eval().requires_grad_(False)
     bce_loss = torch.nn.BCELoss()
@@ -125,6 +131,7 @@ def main():
         model.load_state_dict(resume_state["model_state_dict"])
         ema_model.load_state_dict(resume_state["ema_state_dict"])
         optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+        lr_scheduler.load_state_dict(resume_state["lr_scheduler_state_dict"])
         start_epoch = resume_state["epoch"] + 1
         top_indices = resume_state["watermark_indices"]
         top_indices = top_indices.to(device) if top_indices is not None else None
@@ -142,6 +149,7 @@ def main():
             "model_state_dict": model.state_dict(),
             "ema_state_dict": ema_model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "lr_scheduler_state_dict": lr_scheduler.state_dict(),
             "watermark_indices": top_indices.cpu() if top_indices is not None else None,
             "secret_key": key.cpu(),
             "target_layer_name": layer_path,
@@ -214,6 +222,7 @@ def main():
                             accumulated_grad[name] += param.grad.abs()
 
                 optimizer.step()
+                lr_scheduler.step()
                 LSUNfunc.update_ema(ema_model, model, args.ema_decay, current_steps)
 
                 epoch_normal_loss += normal_loss.item()
@@ -225,6 +234,7 @@ def main():
                     "total_avg_loss": f"{epoch_loss/(batch_idx+1):.7f}",
                     "normal_avg_loss": f"{epoch_normal_loss/(batch_idx+1):.7f}",
                     "w_avg_loss": f"{epoch_wmark_loss/(batch_idx+1):.7f}",
+                    "lr": f"{lr_scheduler.get_last_lr()[0]:.2e}",
                 })
 
         # 透かし埋め込み位置の決定（最初のepochの後に1回だけ）
@@ -327,7 +337,7 @@ def main():
 [Hyperparameters]
 Epochs       : {num_epochs}
 Batch Size   : {args.batch_size}
-Learning Rate: {lr}
+Learning Rate: {lr} (warmup {args.warmup_steps} steps + cosine)
 Arch         : {args.arch}
 CFG scale    : {guidance_scale}
 EMA decay    : {args.ema_decay}
