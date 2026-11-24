@@ -23,12 +23,14 @@ def main():
     parser.add_argument("--cfg", type=float, default=3.0)
     parser.add_argument("--null-label", type=int, default=2)
     parser.add_argument("--data-dir", default="./dataset/val_256")
+    parser.add_argument("--arch", default=None, help="v1 / v2 (default: read from checkpoint, old checkpoints = v1)")
     parser.add_argument("--out-dir", default=None, help="default: <ckpt dir>/eval_<timestamp>")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, _, _, scheduler = LSUNfunc.create_model(1e-4)
     state = torch.load(args.ckpt, map_location="cpu")
+    arch = args.arch or state.get("arch", "v1")  # 古いチェックポイントには"arch"がない = v1
+    model, _, _, scheduler = LSUNfunc.create_model(1e-4, arch=arch)
     model.load_state_dict(state["model_state_dict"])
     model.to(device)
 

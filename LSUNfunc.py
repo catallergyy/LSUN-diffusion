@@ -11,35 +11,53 @@ from diffusers import DDPMScheduler, DPMSolverMultistepScheduler
 from diffusers.models import UNet2DModel
 from pytorch_fid.fid_score import calculate_fid_given_paths
 
-def create_model(learning_rate):
+# アーキテクチャ設定
+#  v1: 旧設定（STL-10 96x96からのコピー）。128x128でattentionがあり非常に遅い。旧チェックポイント読み込み用。
+#  v2: 256x256向け（DDPM論文のLSUN 256設定に近い）。6段階 256->128->64->32->16->8、attentionは16x16のみ（+mid block 8x8）。
+ARCHS = {
+    "v1": dict(
+        block_out_channels=(128, 256, 256, 512),
+        down_block_types=("DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D"),
+        up_block_types=("AttnUpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D"),
+        attention_head_dim=8,
+    ),
+    "v2": dict(
+        block_out_channels=(128, 128, 256, 256, 512, 512),
+        down_block_types=(
+            "DownBlock2D",        # 256x256
+            "DownBlock2D",        # 128x128
+            "DownBlock2D",        # 64x64
+            "DownBlock2D",        # 32x32
+            "AttnDownBlock2D",    # 16x16  (Attentionはここだけ: 256トークン)
+            "DownBlock2D",        # 8x8    (mid blockにもAttentionあり)
+        ),
+        up_block_types=(
+            "UpBlock2D",          # 8x8
+            "AttnUpBlock2D",      # 16x16
+            "UpBlock2D",          # 32x32
+            "UpBlock2D",          # 64x64
+            "UpBlock2D",          # 128x128
+            "UpBlock2D",          # 256x256
+        ),
+        attention_head_dim=64,    # 1ヘッドあたり64次元（旧8次元は小さすぎて非効率）
+    ),
+}
+DEFAULT_ARCH = "v2"
+
+
+def watermark_layer_path(model):
+    """透かし埋め込み層 = 最後のup blockの最後のResNetのconv2（v1では up_blocks.3..., v2では up_blocks.5...。どちらも128ch 3x3 = 147,456重み）"""
+    return f"up_blocks.{len(model.up_blocks) - 1}.resnets.2.conv2"
+
+
+def create_model(learning_rate, arch=DEFAULT_ARCH):
     model = UNet2DModel(
-        num_class_embeds=3,          # 
-        sample_size=256,              #解像度
+        num_class_embeds=3,           # 0=bedroom, 1=cat, 2=null(CFG)
+        sample_size=256,              # 解像度
         in_channels=3,                # RGB
         out_channels=3,               # RGB
         layers_per_block=2,           # 各ブロックのResNet層数
-        
-        # チャンネル数を段階的に増やす
-        block_out_channels=(128, 256, 256, 512),  # 表現力の豊かさ、いったんこのままでいく
-        
-        # ダウンサンプリング
-        down_block_types=(
-            "DownBlock2D",        # 96x96 -> 48x48 (最初は軽量)
-            "AttnDownBlock2D",    # 48x48 -> 24x24   (Attention導入)
-            "AttnDownBlock2D",    # 24x24 -> 12x12
-            "AttnDownBlock2D",    # 12x12 -> 6x6     (最も抽象的)
-        ),
-        
-        # アップサンプリング（逆順）
-        up_block_types=(
-            "AttnUpBlock2D",      
-            "AttnUpBlock2D",      
-            "AttnUpBlock2D",      
-            "UpBlock2D",          
-        ),
-        
-        # Attentionの設定
-        attention_head_dim=8,         # Attentionヘッド次元
+        **ARCHS[arch],
     )
     
     # 損失関数
@@ -65,7 +83,7 @@ def create_model(learning_rate):
     # パラメータ数を表示
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"\nModel created:")
+    print(f"\nModel created (arch={arch}):")
     print(f"  Total parameters: {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
     

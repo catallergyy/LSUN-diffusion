@@ -37,7 +37,7 @@ def main():
     loss_fn.to(device)
     bce_loss=torch.nn.BCELoss()
     #============ 透かし埋め込み層 =============
-    layer_path = "up_blocks.3.resnets.2.conv2" 
+    layer_path = LSUNfunc.watermark_layer_path(model)  # 最後のup blockの最後のconv2（v1: up_blocks.3, v2: up_blocks.5）
     #=========================================
     try:
         # その変数を使ってレイヤーの実体を取得する
