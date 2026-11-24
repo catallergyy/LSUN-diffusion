@@ -37,6 +37,7 @@ def parse_args():
     p.add_argument("--ema-decay", type=float, default=0.9995,
                    help="EMA重みの減衰率。サンプル生成とFIDはEMA重みを使う")
     # 保存・確認
+    p.add_argument("--no-amp", action="store_true", help="bf16 autocastを使わない（fp32で学習）")
     p.add_argument("--save-every", type=int, default=50, help="N epochごとにチェックポイント保存")
     p.add_argument("--sample-every", type=int, default=25, help="N epochごとにサンプル画像を保存")
     p.add_argument("--sample-steps", type=int, default=50, help="DPM-Solver++ のステップ数")
@@ -75,6 +76,9 @@ def save_samples(model, scheduler, device, args, null_label, path):
 def main():
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_amp = device.type == "cuda" and not args.no_amp  # UNetのforwardだけbf16（loss・透かし計算はfp32）
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     now = datetime.datetime.now().strftime("%Y-%m-%d")
 
     resume_state = torch.load(args.resume, map_location="cpu") if args.resume else None
@@ -196,9 +200,10 @@ def main():
                 timestep = torch.randint(0, scheduler.config.num_train_timesteps, (bs,), device=device).long()
                 noisy_images = scheduler.add_noise(data, noise, timestep)
 
-                # モデルの予測
-                output = model(noisy_images, timestep, class_labels=labels).sample
-                normal_loss = loss_fn(output, noise)
+                # モデルの予測（bf16 autocast）
+                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                    output = model(noisy_images, timestep, class_labels=labels).sample
+                normal_loss = loss_fn(output.float(), noise)
 
                 if embed_wmark:
                     #=========透かし埋め込みlossの計算======================
@@ -339,6 +344,7 @@ Epochs       : {num_epochs}
 Batch Size   : {args.batch_size}
 Learning Rate: {lr} (warmup {args.warmup_steps} steps + cosine)
 Arch         : {args.arch}
+bf16 autocast: {use_amp}
 CFG scale    : {guidance_scale}
 EMA decay    : {args.ema_decay}
 SORT         : {SORT}
