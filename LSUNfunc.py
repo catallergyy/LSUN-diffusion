@@ -1,35 +1,15 @@
-from diffusers import DDPMScheduler
-from diffusers.models import UNet2DModel
-import torch
-import cv2
-import numpy as np
-from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
-from torchvision.utils import save_image
-from torchvision.transforms.functional import to_pil_image
-import tensorflow as tf
-from tensorflow.keras.applications import InceptionV3
-from tensorflow.keras.applications.inception_v3 import preprocess_input
-from scipy.linalg import sqrtm
-from tqdm import tqdm
-import numpy as np
-from scipy.linalg import sqrtm
-from tensorflow.keras.applications.inception_v3 import InceptionV3, preprocess_input
-import tensorflow as tf
-from PIL import Image
-import matplotlib.pyplot as plt
+import os
+import shutil
+
 import torch
 import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
-import os
+from PIL import Image
+from tqdm import tqdm
+from diffusers import DDPMScheduler, DPMSolverMultistepScheduler
+from diffusers.models import UNet2DModel
 from pytorch_fid.fid_score import calculate_fid_given_paths
-import shutil
-
-# FID用（特徴抽出）
-model_feat = InceptionV3(include_top=False, pooling='avg', weights="imagenet")
-# IS用（確率予測）
-model_clf = InceptionV3(include_top=True, weights="imagenet")
 
 def create_model(learning_rate):
     model = UNet2DModel(
@@ -90,68 +70,6 @@ def create_model(learning_rate):
     print(f"  Trainable parameters: {trainable_params:,}")
     
     return model, loss_fn, optimizer, scheduler
-def fid(original,generated):
-    #画像の前処理
-    def to_numpy_channel_last(imgs):
-        if hasattr(imgs,'cpu'):
-            imgs=imgs.cpu().detach()
-            if imgs.ndim==4 and imgs.shape[1] in [1,3]:
-                imgs=imgs.permute(0,2,3,1)
-            imgs=imgs.numpy()
-        if imgs.min()<0:
-            imgs=(imgs/2+0.5)*255
-        return imgs
-    
-    original_input=to_numpy_channel_last(original)
-    generated_input=to_numpy_channel_last(generated)
-    
-    def prepare_images(imgs):
-        imgs=tf.convert_to_tensor(imgs)
-        imgs=tf.image.resize(imgs,(299,299))
-        imgs=preprocess_input(imgs)
-        return imgs
-    
-    original_input=prepare_images(original_input)
-    generated_input=prepare_images(generated_input)
-    #特徴量抽出
-    original_feature=model_feat.predict(original_input, verbose=0)
-    generated_feature=model_feat.predict(generated_input, verbose=0)
-    #統計量の計算
-    mu_original=np.mean(original_feature, axis=0)
-    mu_generated=np.mean(generated_feature,axis=0)
-    sigma_original=np.cov(original_feature, rowvar=False)
-    sigma_generated=np.cov(generated_feature, rowvar=False)
-    epsilon=1e-6
-    
-    assert mu_original.shape==mu_generated.shape,"エラー処理、muの形が違えば終了"
-    assert sigma_generated.shape==sigma_original.shape,"エラー処理、sigmaの形が違えば終了"
-    
-    sigma_original += np.eye(sigma_original.shape[0]) * epsilon
-    sigma_generated += np.eye(sigma_generated.shape[0]) * epsilon
-    
-    diff=mu_original-mu_generated
-    
-    covmean=sigma_original.dot(sigma_generated)
-    res=sqrtm(covmean)
-    
-    cov_sqrt=res[0] if isinstance(res,tuple) else res
-    
-    if np.iscomplexobj(cov_sqrt):
-        conv_sqrt=conv_sqrt.real
-    tr_covmean=np.trace(cov_sqrt)
-    fid_score=np.sum(diff**2)+np.trace(sigma_original)+np.trace(sigma_generated)-2*tr_covmean
-    #FIDスコア計算終了
-    #IS計算
-    predictions=model_clf.predict(generated_input, verbose=0)
-    
-    marginal_prob=np.mean(predictions, axis=0)
-    epsilon_is=1e-16
-    k1=predictions*(np.log(predictions+epsilon_is)-np.log(marginal_prob+epsilon_is))
-    k1=np.sum(k1,axis=1)
-    
-    inception_score=np.exp(np.mean(k1))
-    
-    return fid_score,inception_score
 def save_images_locally(images,path):
     os.makedirs(path,exist_ok=True)
     for i, data in enumerate(images):
@@ -188,25 +106,6 @@ def save_images_locally(images,path):
         pil_img.save(save_path)
     
     print(f"saved {len(images)} images to {path}")
-
-def read_and_preprocess_images(folder_path):
-    images = []
-    for filename in os.listdir(folder_path):
-        # Read image
-        image_path = os.path.join(folder_path, filename)
-        img = cv2.imread(image_path)
-        if img is None:
-            continue
-
-        # Convert BGR to RGB
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        # Resize image to (299, 299)
-        img_resized = cv2.resize(img_rgb, (299, 299))
-
-        images.append(img_resized)
-
-    return np.array(images)
 
 def accumulate_gradients(model,grad_accumulator):
     """毎ステップ呼び出して、勾配の大きさを蓄積する"""
@@ -327,8 +226,9 @@ def load_data(batch_size=64, data_dir="./dataset/val_256"):
         dataset, 
         batch_size=batch_size, 
         shuffle=True,
-        num_workers=0,
-        pin_memory=False
+        num_workers=4,
+        pin_memory=True,
+        persistent_workers=True
     )
     
     print(f"\nDataLoader created:")
