@@ -73,10 +73,7 @@ def main():
                     data = data.to(device)
                     labels = labels.to(device)
                 
-                    # ラベルの変換: 4(deer)→0, 9(truck)→1
-                    new_labels = torch.zeros_like(labels)
-                    new_labels[labels == 9] = 1
-                    labels = new_labels
+                    # LSUN: DatasetFolder already gives bedroom=0, cat=1 (no remap needed)
                     
                     # ★ CFG用: ランダムにnull labelを適用
                     cfg_mask = torch.rand(labels.shape[0], device=device) < cfg_dropout_prob
@@ -124,10 +121,7 @@ def main():
                     data = data.to(device)
                     labels = labels.to(device)
                 
-                    # ラベルの変換: 4(deer)→0, 9(truck)→1
-                    new_labels = torch.zeros_like(labels)
-                    new_labels[labels == 9] = 1
-                    labels = new_labels
+                    # LSUN: DatasetFolder already gives bedroom=0, cat=1 (no remap needed)
                     
                     # ★ CFG用: ランダムにnull labelを適用
                     cfg_mask = torch.rand(labels.shape[0], device=device) < cfg_dropout_prob
