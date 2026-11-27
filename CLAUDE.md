@@ -1,177 +1,176 @@
-# CLAUDE.md: LSUN watermarked diffusion model
+# CLAUDE.md: LSUN 透かし入り拡散モデル
 
-This file records how Claude understands this project and the user's instructions.
-**The user should check it and correct anything wrong.** Items marked ❓ are guesses or open questions.
-
----
-
-## 1. The user's instructions (how to work)
-
-1. **Record every code change on GitHub.** Make one small commit per fix, with a message that explains *why*,
-   then push to `git@github.com:catallergyy/LSUN-diffusion.git` (branch `main`).
-   The user reviews each change on GitHub.
-2. **Explain before changing.** Propose the plan first and wait for "yes" before editing code.
-3. **Don't commit large files.** Data, images, checkpoints (`*.pt`, `*.pth`) and `*.npz` stay local (`.gitignore`).
-4. **Talk to the user in Japanese** (changed 2026-11-27; before it was simple English). Code comments are in Japanese too.
-5. Current priorities:
-   - **Generate clearer images** (better FID). The watermark is off (`lambda_=0`) for now.
-   - **Evaluation and training take too long** (FID evaluation took about 40 h). Make them faster without breaking the research.
+このファイルは、Claude がこのプロジェクトとユーザーの指示をどう理解しているかを記録したものです。
+**間違いがあればユーザーが確認して直してください。** ❓ の付いた項目は推測か、まだ答えが出ていない質問です。
 
 ---
 
-## 2. What the project is
+## 1. ユーザーの指示（作業の進め方）
 
-A **class-conditional diffusion model** (DDPM, 256×256) for 2 classes, **bedroom** and **cat**, with:
-
-- **Classifier-Free Guidance (CFG)**: label dropout during training, and a guidance scale at sampling time.
-- **A watermark embedded in the model weights**: a secret bit pattern is hidden in selected weights of one layer.
-  The goal is to prove ownership of the model.
-- **FID** (pytorch-fid) to check that image quality stays good after the watermark is added.
-
-The research question, as Claude understands it: *can the watermark be embedded and extracted reliably while keeping FID close to the non-watermarked model?* ❓
-
-The older STL-10 version of the same idea is in `../` (root-level scripts) and `../STL/`.
+1. **コードの変更はすべて GitHub に記録する。** 修正ごとに小さなコミットを1つ作り、メッセージには「なぜ変えたか」を書く。
+   そのあと `git@github.com:catallergyy/LSUN-diffusion.git`（ブランチ `main`）に push する。
+   ユーザーは GitHub で変更を1つずつ確認する。
+2. **変更の前に説明する。** まず計画を提案し、「はい」をもらってからコードを編集する。
+3. **大きなファイルはコミットしない。** データ、画像、チェックポイント（`*.pt`, `*.pth`）、`*.npz` はローカルに置いたままにする（`.gitignore`）。
+4. **ユーザーへの説明は日本語で行う**（2026-11-27 に変更。以前は簡単な英語）。コードのコメントも日本語。
+5. 現在の優先事項:
+   - **生成画像をもっときれいにする**（FID を下げる）。今は透かしをオフにしている（`lambda_=0`）。
+   - **評価と学習に時間がかかりすぎる**（FID 評価に約40時間かかっていた）。研究の中身を壊さずに速くする。
 
 ---
 
-## 3. Files
+## 2. プロジェクトの概要
 
-| File | Role |
+2クラス（**bedroom** と **cat**）を生成する、**クラス条件付き拡散モデル**（DDPM、256×256）。特徴は次のとおり。
+
+- **Classifier-Free Guidance（CFG）**: 学習時にラベルをランダムに消し（ラベルドロップアウト）、生成時にガイダンススケールをかける。
+- **モデルの重みに埋め込む透かし**: 秘密のビット列を、ある1つの層の選んだ重みに隠す。
+  目的はモデルの所有権を証明すること。
+- **FID**（pytorch-fid）: 透かしを入れても画質が落ちていないかを確認する。
+
+Claude の理解している研究テーマ: *FID を透かしなしのモデルに近いまま保ちながら、透かしを確実に埋め込み・取り出せるか？* ❓
+
+同じアイデアの古い STL-10 版は `../`（ルートのスクリプト）と `../STL/` にある。
+
+---
+
+## 3. ファイル
+
+| ファイル | 役割 |
 |---|---|
-| `LSUNdataloader.py` | Downloads images from Hugging Face into `LSUN_origin/{bedroom,cat}`, then resizes and center-crops them to 256×256 into `dataset/val_256/{bedroom,cat}` (500 per class, 1000 total). |
-| `LSUNfunc.py` | Model and scheduler creation, data loading, CFG sampling, building the FID reference folder, and FID evaluation. |
-| `LSUNembedding.py` | Watermark settings and the generators for the key and the bit pattern. |
-| `LSUNtrain.py` | Main script: train, then embed the watermark, save, compute FID, and write a log. |
-| `eval_fid.py` | (Added by Claude.) Computes FID from a saved checkpoint without training. |
-| `fid_test.py` | Older FID test (TensorFlow-based) ❓ probably no longer used. |
-| `fid_stats_lsun_{bedroom,cat}.npz` | Precomputed FID statistics ❓ unknown source and Inception version. They are not used by the code. |
-| `content/runs/<date>/` | Outputs: checkpoints, loss graphs, sample images, `training_log.txt`. |
-| `archive/` | Old material (9.5 GB, not tracked). |
+| `LSUNdataloader.py` | Hugging Face から画像を `LSUN_origin/{bedroom,cat}` にダウンロードし、256×256 にリサイズ・中央切り抜きして `dataset/val_256/{bedroom,cat}` に保存する（各クラス500枚、合計1000枚）。 |
+| `LSUNfunc.py` | モデルとスケジューラの作成、データ読み込み、CFG サンプリング、FID 参照フォルダの作成、FID 評価。 |
+| `LSUNembedding.py` | 透かしの設定と、鍵・ビット列の生成関数。 |
+| `LSUNtrain.py` | メインスクリプト: 学習 → 透かし埋め込み → 保存 → FID 計算 → ログ書き出し。 |
+| `eval_fid.py` | （Claude が追加）学習せずに、保存済みチェックポイントから FID だけを計算する。 |
+| `fid_test.py` | 古い FID テスト（TensorFlow 版）❓ たぶんもう使っていない。 |
+| `fid_stats_lsun_{bedroom,cat}.npz` | 計算済みの FID 統計量 ❓ 出どころと Inception のバージョンは不明。コードでは使われていない。 |
+| `content/runs/<日付>/` | 出力: チェックポイント、loss のグラフ、サンプル画像、`training_log.txt`。 |
+| `archive/` | 古い資料（9.5 GB、git 管理外）。 |
 
-### How to run (inside the devcontainer `charming_tu`, path `/workspaces/research/diffusion-model/LSUN`)
-The host Python has no `diffusers`; always run inside the container, e.g.
+### 実行方法（devcontainer `charming_tu` の中、パスは `/workspaces/research/diffusion-model/LSUN`）
+ホスト側の Python には `diffusers` が入っていないので、必ずコンテナの中で実行する。例:
 `docker exec -w /workspaces/research/diffusion-model/LSUN charming_tu python3 ...`
-GPU: NVIDIA GB10 (PyTorch warns that capability 12.1 > 12.0, but it works).
+GPU: NVIDIA GB10（PyTorch が「capability 12.1 > 12.0」と警告を出すが、動作する）。
 
 ```
-python3 LSUNtrain.py --epochs 600                         # normal training (lambda_=0)
-python3 LSUNtrain.py --epochs 600 --sort                  # SORT=True (largest-gradient weights)
-python3 LSUNtrain.py --epochs 800 --resume content/runs/<date>/checkpoint_latest.pt   # continue a run
-python3 eval_fid.py content/runs/<date>/checkpoint_ep0600.pt --steps 25 --cfg 2.0     # FID only
-python3 LSUNtrain.py --help                               # all options
+python3 LSUNtrain.py --epochs 600                         # 通常の学習（lambda_=0）
+python3 LSUNtrain.py --epochs 600 --sort                  # SORT=True（勾配が最も大きい重みを選ぶ）
+python3 LSUNtrain.py --epochs 800 --resume content/runs/<日付>/checkpoint_latest.pt   # 学習の続き
+python3 eval_fid.py content/runs/<日付>/checkpoint_ep0600.pt --steps 25 --cfg 2.0     # FID だけ計算
+python3 LSUNtrain.py --help                               # 全オプション
 ```
 
 ---
 
-## 4. Pipeline in detail
+## 4. 処理の詳細
 
-### 4.1 Data
-- `DatasetFolder("./dataset/val_256")` → classes sorted alphabetically: **bedroom = 0, cat = 1**.
-- Normalized to [-1, 1]. Batch size 16 (`--batch-size`) → 63 batches per epoch.
-- The bedroom images come from `pcuenq/lsun-bedrooms`. The **cat images are real LSUN cat images that the user collected from the web**
-  (confirmed by the user). The data is fine; don't change it.
-  (`download_lsun_samples_from_hf` still contains a `cats_vs_dogs` download, but that is not where the current cat data came from.)
-- The dataset is small (1000 images). It is the same set used for training and for the FID reference.
+### 4.1 データ
+- `DatasetFolder("./dataset/val_256")` → クラスはアルファベット順: **bedroom = 0, cat = 1**。
+- [-1, 1] に正規化。バッチサイズ 16（`--batch-size`）→ 1エポック 63 バッチ。
+- bedroom 画像は `pcuenq/lsun-bedrooms` から。**cat 画像はユーザーが Web から集めた本物の LSUN cat 画像**
+  （ユーザー確認済み）。データは問題ないので変更しない。
+  （`download_lsun_samples_from_hf` には `cats_vs_dogs` のダウンロードが残っているが、今の cat データはそこから来たものではない。）
+- データセットは小さい（1000枚）。学習と FID の参照に同じ画像を使っている。
 
-### 4.2 Model (`LSUNfunc.create_model(lr, arch)`)
-- diffusers `UNet2DModel`, 256×256, `num_class_embeds=3` (0 = bedroom, 1 = cat, **2 = null label for CFG**), 2 ResNet layers per block.
-- **`v2` (default, new):** 6 levels 256→128→64→32→16→8, channels (128,128,256,256,512,512),
-  self-attention **only at 16×16** (+ mid block 8×8), head dim 64. 114M params. Close to the DDPM paper's LSUN-256 model.
-- **`v1` (old, kept to load old checkpoints):** 4 levels, attention at 128/64/32 px, head dim 8. 75M params.
-  Copied from the 96×96 STL-10 model; attention at 128×128 (16,384 tokens) made it extremely slow.
-- Checkpoints store `"arch"`; files without it are v1. **v1 and v2 checkpoints are not compatible.**
-- Loss: MSE on the predicted noise. Optimizer: AdamW (lr 1e-4, weight decay 1e-4).
-- **LR schedule:** linear warmup 1000 steps (`--warmup-steps`) → cosine decay to 0 at the last step of `--epochs`.
-- **EMA weights** (`--ema-decay 0.9995`): a moving average of the weights. **Samples and FID use the EMA model.**
-  The watermark loss and `watermarked_model.pth` use the raw (non-EMA) weights ❓ when lambda_>0 is used again,
-  check whether detection should be done on the EMA or the raw weights.
-- **bf16 autocast** for the UNet forward (loss, watermark loss and weights stay fp32). `--no-amp` turns it off.
-- `DDPMScheduler` for training: 1000 steps, linear beta from 1e-4 to 0.02.
-- **Sampling:** DPM-Solver++ built from the same DDPM config (`make_sampling_scheduler`), default 50 steps (`--sample-steps`).
+### 4.2 モデル（`LSUNfunc.create_model(lr, arch)`）
+- diffusers の `UNet2DModel`、256×256、`num_class_embeds=3`（0 = bedroom, 1 = cat, **2 = CFG 用の空ラベル**）、各ブロックに ResNet 層 2つ。
+- **`v2`（デフォルト、新）:** 6段階 256→128→64→32→16→8、チャネル (128,128,256,256,512,512)、
+  self-attention は **16×16 だけ**（+ 中間ブロック 8×8）、head dim 64。1億1400万パラメータ。DDPM 論文の LSUN-256 モデルに近い。
+- **`v1`（旧、古いチェックポイントを読むために残している）:** 4段階、attention は 128/64/32 px、head dim 8。7500万パラメータ。
+  96×96 の STL-10 モデルをそのまま流用したもの。128×128 での attention（16,384 トークン）のせいで非常に遅かった。
+- チェックポイントには `"arch"` が保存される。これがないファイルは v1。**v1 と v2 のチェックポイントに互換性はない。**
+- Loss: 予測ノイズの MSE。Optimizer: AdamW（lr 1e-4、weight decay 1e-4）。
+- **学習率スケジュール:** 1000 ステップの線形ウォームアップ（`--warmup-steps`）→ `--epochs` の最後のステップで 0 になるコサイン減衰。
+- **EMA 重み**（`--ema-decay 0.9995`）: 重みの移動平均。**サンプル画像と FID は EMA モデルで作る。**
+  透かしの loss と `watermarked_model.pth` は生の（EMA でない）重みを使う ❓ lambda_>0 に戻すときは、
+  検出を EMA 重みと生の重みのどちらで行うべきか確認する。
+- UNet の forward には **bf16 autocast** を使う（loss、透かし loss、重みは fp32 のまま）。`--no-amp` でオフにできる。
+- 学習用の `DDPMScheduler`: 1000 ステップ、beta は 1e-4 から 0.02 まで線形。
+- **サンプリング:** 同じ DDPM 設定から作った DPM-Solver++（`make_sampling_scheduler`）、デフォルト 50 ステップ（`--sample-steps`）。
 
 ### 4.3 CFG
-- Training: each label is replaced by the null label 2 with probability `cfg_dropout_prob = 0.1`.
-- Sampling: `eps = eps_uncond + s * (eps_cond - eps_uncond)`, `s = guidance_scale = 3.0`.
+- 学習時: 各ラベルを確率 `cfg_dropout_prob = 0.1` で空ラベル 2 に置き換える。
+- 生成時: `eps = eps_uncond + s * (eps_cond - eps_uncond)`、`s = guidance_scale = 3.0`。
 
-### 4.4 Watermark (`LSUNembedding.py` + `LSUNtrain.py`)
-- Target layer: **last conv2 of the last up block** (`LSUNfunc.watermark_layer_path`):
-  v1 = `up_blocks.3.resnets.2.conv2`, v2 = `up_blocks.5.resnets.2.conv2`. Both are 128→128, 3×3 → 147,456 weights.
-- `wmark_m = 18000` selected weights, `wmark_dim = 4096` watermark bits.
-- Secret key `K`: `randn(18000, 4096)` with seed `w_key_seed=0`.
-  Watermark bits `b`: `randint(0,2,(1,4096))` with seed `wmark_seed=123`.
-- **Epoch 0 (normal training only):** accumulate `|grad|` of the target layer over all batches.
-  At the end of epoch 0, sort the weights by their accumulated gradient and take the first `wmark_m` as the embedding positions.
-  - `SORT` (`--sort` flag) is an **experiment switch** (confirmed by the user). The research compares how the gradient size of the
-    chosen weights affects watermark embedding:
-    - `SORT=False` → `torch.sort(descending=False)` → **the smallest-gradient weights** (the current setting, intended)
-    - `SORT=True` → **the largest-gradient weights**
-    Keep this option; never hard-code one direction.
-  - The code takes the first `wmark_m` weights in a row (the old comments about odd-numbered indices / "×2 capacity" were never implemented and are removed).
-  - Saves `watermarked_model.pth` = {model weights *at the end of epoch 0*, indices, secret key, layer name}.
-    The bit pattern itself is not saved; it is regenerated from the seed.
-- **Epoch ≥ 1:** loss = `MSE + lambda_ * BCE(sigmoid(w_selected · K), b)`.
-- Extraction / detection: `sigmoid(w_selected · K) > 0.5` should equal `b` ❓ The detection scripts (`../detection*.py`) have not been read yet.
-- `lambda_ = 0` **on purpose** (confirmed by the user): the **current goal is clearer generated images**,
-  so the watermark is off for now. Don't change `lambda_` unless asked.
-- The number of epochs must be **flexible**: `--epochs N` (default 600). Earlier runs used **600 epochs**.
+### 4.4 透かし（`LSUNembedding.py` + `LSUNtrain.py`）
+- 対象の層: **最後の up ブロックの最後の conv2**（`LSUNfunc.watermark_layer_path`）:
+  v1 = `up_blocks.3.resnets.2.conv2`、v2 = `up_blocks.5.resnets.2.conv2`。どちらも 128→128、3×3 → 重み 147,456 個。
+- 選ぶ重みの数 `wmark_m = 18000`、透かしのビット数 `wmark_dim = 4096`。
+- 秘密鍵 `K`: `randn(18000, 4096)`、シード `w_key_seed=0`。
+  透かしビット `b`: `randint(0,2,(1,4096))`、シード `wmark_seed=123`。
+- **エポック 0（通常の学習だけ）:** 対象の層の `|grad|` を全バッチで足し合わせる。
+  エポック 0 の最後に、足し合わせた勾配で重みを並べ替え、先頭の `wmark_m` 個を埋め込み位置にする。
+  - `SORT`（`--sort` フラグ）は**実験用の切り替え**（ユーザー確認済み）。選んだ重みの勾配の大きさが
+    透かしの埋め込みにどう影響するかを比べる研究:
+    - `SORT=False` → `torch.sort(descending=False)` → **勾配が最も小さい重み**（現在の設定、意図どおり）
+    - `SORT=True` → **勾配が最も大きい重み**
+    このオプションは残すこと。どちらか一方に固定しない。
+  - コードは先頭から連続した `wmark_m` 個の重みを取る（「奇数番目のインデックス」「容量2倍」という古いコメントは実装されていなかったので削除した）。
+  - `watermarked_model.pth` を保存する = {*エポック 0 終了時点*のモデル重み、インデックス、秘密鍵、層の名前}。
+    ビット列そのものは保存しない。シードから作り直す。
+- **エポック 1 以降:** loss = `MSE + lambda_ * BCE(sigmoid(w_selected · K), b)`。
+- 取り出し・検出: `sigmoid(w_selected · K) > 0.5` が `b` と一致すればよい ❓ 検出スクリプト（`../detection*.py`）はまだ読んでいない。
+- `lambda_ = 0` は**意図的**（ユーザー確認済み）: **今の目標は生成画像をきれいにすること**なので、
+  透かしは今はオフ。頼まれない限り `lambda_` は変えない。
+- エポック数は**自由に変えられること**: `--epochs N`（デフォルト 600）。これまでの実験は **600 エポック**。
 
-### 4.5 Saving and evaluation
-- Output folder: `content/runs/<date>/` (or `--save-dir`). Each epoch: loss graphs, `checkpoint_latest.pt` (for `--resume`),
-  `best_model.pt` (lowest training loss). Every `--save-every 50` epochs: `checkpoint_epNNNN.pt`.
-  Every `--sample-every 25` epochs: `samples/epoch_NNNN.png` (top row bedroom, bottom row cat, EMA weights) → **look at these to see quality improve**.
-- ⚠️ Disk: one checkpoint ≈ 1.8 GB (model + EMA + optimizer). 600 epochs with `--save-every 50` ≈ 25 GB.
-- Final FID (`evaluate_and_calculate_fid`): generates `--fid-samples 2000` images (exactly 50% bedroom / 50% cat) with the EMA model,
-  runs pytorch-fid against `./fid_ref_lsun` (all 1000 real images), then deletes the generated images.
-  Also saves 16 samples per class to `raw_generate_final_check/`. IS is not computed (always 0.0).
-- Logs hyperparameters, training time and FID to `<save_dir>/training_log.txt`.
-- FID with 1000 reference images is noisy: good for comparing runs, but not comparable to numbers in papers.
+### 4.5 保存と評価
+- 出力フォルダ: `content/runs/<日付>/`（または `--save-dir`）。毎エポック: loss のグラフ、`checkpoint_latest.pt`（`--resume` 用）、
+  `best_model.pt`（学習 loss が最小のもの）。`--save-every 50` エポックごと: `checkpoint_epNNNN.pt`。
+  `--sample-every 25` エポックごと: `samples/epoch_NNNN.png`（上の段が bedroom、下の段が cat、EMA 重み）→ **画質が良くなっていくかはこれを見る**。
+- ⚠️ ディスク: チェックポイント1つ ≈ 1.8 GB（モデル + EMA + optimizer）。600 エポックを `--save-every 50` で回すと ≈ 25 GB。
+- 最終 FID（`evaluate_and_calculate_fid`）: EMA モデルで `--fid-samples 2000` 枚（bedroom と cat をちょうど半分ずつ）生成し、
+  `./fid_ref_lsun`（本物の画像 1000 枚すべて）と pytorch-fid で比較し、生成画像は削除する。
+  クラスごとに16枚のサンプルを `raw_generate_final_check/` にも保存する。IS は計算しない（常に 0.0）。
+- ハイパーパラメータ、学習時間、FID を `<save_dir>/training_log.txt` に記録する。
+- 参照画像が1000枚の FID はばらつきが大きい。実験同士の比較には使えるが、論文の数値とは比べられない。
 
-### 4.6 Measured speed (GB10, batch 16, 2026-11-24)
-| | train step | 1 sampling step (16 images with CFG) |
+### 4.6 実測の速度（GB10、バッチ 16、2026-11-24）
+| | 学習 1 ステップ | サンプリング 1 ステップ（CFG 付きで16枚） |
 |---|---|---|
-| v2 + bf16 | **1.9 s** → ~130 s/epoch → **600 epochs ≈ 22 h** | 1.5 s |
-| v2 fp32 | 2.5 s | 1.9 s |
-| v1 (old) + bf16 | > 60 s (benchmark stopped) | — |
+| v2 + bf16 | **1.9 秒** → 約 130 秒/エポック → **600 エポック ≈ 22 時間** | 1.5 秒 |
+| v2 fp32 | 2.5 秒 | 1.9 秒 |
+| v1（旧）+ bf16 | 60 秒以上（計測を途中で止めた） | — |
 
-- Final FID with 2000 images × 50 steps ≈ 2.6 h. With `--steps 25` (or `--sample-steps 25`) ≈ 1.3 h.
-- The old evaluation (v1, 1000 DDPM steps, 2 forward passes per step) explains the ~40 h.
+- 2000枚 × 50 ステップの最終 FID ≈ 2.6 時間。`--steps 25`（または `--sample-steps 25`）なら ≈ 1.3 時間。
+- 以前の評価（v1、DDPM 1000 ステップ、1ステップに forward 2回）が約40時間かかった理由はこれ。
 
-## 5. Changes made by Claude (see the GitHub commits)
+## 5. Claude が行った変更（GitHub のコミットを参照）
 
-| Commit | Change |
+| コミット | 変更内容 |
 |---|---|
-| `ac23bbd` | **Bug fix:** removed the STL-10 label remap (`labels==9 → 1`). It turned every cat into label 0 (bedroom), so the cat class was never learned. **All checkpoints before this fix have this bug.** |
-| `1382d64` | **Bug fix:** the FID reference was the first 100 dataset images, all bedrooms. It is now all 1000 images of both classes (`./fid_ref_lsun`). |
-| `c06d6f8` | Removed TensorFlow, the two unused InceptionV3 models and the unused code; DataLoader `num_workers=4`. |
-| `93e1e54` | Sampling: DPM-Solver++ with 50 steps (instead of 1000 DDPM steps), cond and uncond in one forward pass, bf16. Number of FID samples 100 → 2000 (100 is too few for a valid FID). |
-| `ca510d5` | `eval_fid.py` for evaluating a checkpoint. |
-| `57bc28d` | New UNet architecture **v2** (attention only at 16×16). `v1` is kept for old checkpoints. |
-| `b37958e` | `LSUNtrain.py` refactor: command-line options (`--epochs` …), checkpoints, sample images, `--resume`; the two training loops are merged into one. |
-| `a0e6a4a` | **EMA** weights; samples and FID use them. |
-| `2e905d7` | **LR warmup + cosine decay**. |
-| `c6c8023` | **bf16 autocast** + TF32 for training. |
+| `ac23bbd` | **バグ修正:** STL-10 用のラベル変換（`labels==9 → 1`）を削除。これのせいで cat がすべてラベル 0（bedroom）になり、cat クラスが学習されていなかった。**この修正より前のチェックポイントはすべてこのバグを含む。** |
+| `1382d64` | **バグ修正:** FID の参照画像がデータセットの先頭100枚で、すべて bedroom だった。今は両クラスの1000枚すべて（`./fid_ref_lsun`）。 |
+| `c06d6f8` | TensorFlow、使っていない InceptionV3 モデル2つ、使っていないコードを削除。DataLoader `num_workers=4`。 |
+| `93e1e54` | サンプリング: DDPM 1000 ステップをやめて DPM-Solver++ 50 ステップに、cond と uncond を1回の forward で計算、bf16。FID の生成枚数 100 → 2000（100枚では FID として不十分）。 |
+| `ca510d5` | チェックポイントを評価する `eval_fid.py` を追加。 |
+| `57bc28d` | 新しい UNet 構造 **v2**（attention は 16×16 だけ）。古いチェックポイント用に `v1` も残す。 |
+| `b37958e` | `LSUNtrain.py` の整理: コマンドラインオプション（`--epochs` など）、チェックポイント、サンプル画像、`--resume`。2つあった学習ループを1つにまとめた。 |
+| `a0e6a4a` | **EMA** 重み。サンプルと FID は EMA を使う。 |
+| `2e905d7` | **学習率のウォームアップ + コサイン減衰**。 |
+| `c6c8023` | 学習に **bf16 autocast** + TF32。 |
 
-✅ Tested on 2026-11-24 in the devcontainer: a 2-epoch run went through training → watermark position selection →
-checkpoints → sample grids → FID → log without errors.
+✅ 2026-11-24 に devcontainer でテスト済み: 2エポックの実行で、学習 → 透かし位置の選択 →
+チェックポイント → サンプル画像 → FID → ログ まで、エラーなく通った。
 
-### First long run: `content/runs/2026-11-24/` (v2, 600 epochs, lambda_=0, CFG 3.0)
-- Finished. **FID = 144.2** (EMA, 2000 samples, DPM-Solver++ 50 steps). Training time **35 h 54 m** (the estimate was ~22 h; cause not checked yet ❓).
-- `samples/epoch_0600.png`: bedrooms are recognizable but have strong color casts (all pink / all blue) and noisy texture.
-  Cats mostly fail (color blobs, only a few fur/face shapes).
-  The over-saturated colors suggest the CFG scale 3.0 is too high ❓.
+### 最初の長い学習: `content/runs/2026-11-24/`（v2、600 エポック、lambda_=0、CFG 3.0）
+- 完了。**FID = 144.2**（EMA、2000枚、DPM-Solver++ 50 ステップ）。学習時間 **35時間54分**（見積もりは約22時間。原因はまだ調べていない ❓）。
+- `samples/epoch_0600.png`: bedroom は部屋だとわかるが、色が強く偏っていて（全体がピンク、全体が青など）、質感がざらざらしている。
+  cat はほとんど失敗（色のかたまりで、毛や顔の形がわかるものは少しだけ）。
+  色が濃すぎるのは CFG スケール 3.0 が大きすぎるためかもしれない ❓。
 
 ---
 
-## 6. Next steps (proposed, not done)
+## 6. 次のステップ（提案、まだ未実施）
 
-1. ~~User starts a real run~~ → done (see above).
-2. **(Running, started 2026-11-27)** On `2026-11-24/checkpoint_ep0600.pt`, find the best CFG scale by FID (e.g. 1.5 / 2 / 3 / 5) with `eval_fid.py --cfg`.
-3. Choose the "best model" by FID or the last EMA checkpoint, not by training loss (the diffusion loss barely tells image quality).
-4. Possible further speed-ups (not tried): `torch.compile`, channels_last.
+1. ~~ユーザーが本番の学習を始める~~ → 完了（上記）。
+2. **（実行中、2026-11-27 開始）** `2026-11-24/checkpoint_ep0600.pt` で、`eval_fid.py --cfg` を使って FID が最も良い CFG スケールを探す（例: 1.5 / 2 / 3 / 5）。
+3. 「ベストモデル」は学習 loss ではなく、FID か最後の EMA チェックポイントで選ぶ（拡散モデルの loss は画質とほとんど関係しない）。
+4. さらに速くする案（未実施）: `torch.compile`、channels_last。
 
-## 7. Questions for the user ❓
-- ~~Is choosing the *smallest*-gradient weights (`SORT=False`) intended?~~ → **Yes.** `SORT` is an experiment option for comparing small vs. large gradients (answered 2026-11-24).
-- ~~Is `lambda_=0` / 1 epoch a baseline run, or a mistake?~~ → **On purpose.** 
-(answered 2026-11-24).
-- ~~Is it OK that `cats_vs_dogs` is used as the "cat" class?~~ → **The cat data is real LSUN cat images collected by the user. It's OK** (answered 2026-11-24).
-- Where do the `fid_stats_lsun_*.npz` files come from?
+## 7. ユーザーへの質問 ❓
+- ~~*勾配が最も小さい*重みを選ぶ（`SORT=False`）のは意図どおりか？~~ → **はい。** `SORT` は勾配の大小を比べるための実験オプション（2026-11-24 回答）。
+- ~~`lambda_=0` / 1エポックはベースライン実験か、間違いか？~~ → **意図的。**（2026-11-24 回答）
+- ~~`cats_vs_dogs` を「cat」クラスとして使ってよいか？~~ → **cat データはユーザーが集めた本物の LSUN cat 画像。問題なし**（2026-11-24 回答）。
+- `fid_stats_lsun_*.npz` はどこから来たものか？
