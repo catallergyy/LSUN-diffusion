@@ -215,6 +215,22 @@ def generate_samples_with_cfg(model, scheduler, device, num_samples_per_class=4,
 
 FID_REF_DIR = "./fid_ref_lsun"
 
+def limit_gpu_memory(max_gb):
+    """
+    PyTorch が使える GPU メモリに上限をかける。
+    DGX Spark (GB10) は CPU と GPU が同じメモリ (約122GiB) を共有しているので、
+    あふれると swap が起きてマシン全体がフリーズする。上限を超えたら
+    "CUDA out of memory" のエラーで止まるだけにするための安全装置。
+    max_gb <= 0 なら上限なし。他のプロセス（別コンテナの学習など）の使用量は制限できない点に注意。
+    """
+    if max_gb is None or max_gb <= 0 or not torch.cuda.is_available():
+        return
+    total_gb = torch.cuda.get_device_properties(0).total_memory / 2**30
+    fraction = min(1.0, max_gb / total_gb)
+    torch.cuda.set_per_process_memory_fraction(fraction, 0)
+    print(f"GPU memory limit: {max_gb:.0f} GiB / {total_gb:.1f} GiB ({fraction:.0%})")
+
+
 def build_fid_reference(data_dir, ref_dir=FID_REF_DIR):
     """data_dir/<class>/ の画像を全クラス分 ref_dir にフラットにコピー（pytorch-fidはサブフォルダを読まないため）"""
     if os.path.exists(ref_dir) and len(os.listdir(ref_dir)) > 0:

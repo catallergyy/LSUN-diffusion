@@ -41,6 +41,8 @@ def parse_args():
                    help="EMA重みの減衰率。サンプル生成とFIDはEMA重みを使う")
     # 保存・確認
     p.add_argument("--no-amp", action="store_true", help="bf16 autocastを使わない（fp32で学習）")
+    p.add_argument("--max-mem-gb", type=float, default=80,
+                   help="PyTorchが使うGPUメモリの上限(GiB)。超えたらフリーズせずエラーで止まる。0で上限なし")
     p.add_argument("--save-every", type=int, default=50, help="N epochごとにチェックポイント保存")
     p.add_argument("--sample-every", type=int, default=25, help="N epochごとにサンプル画像を保存")
     p.add_argument("--sample-steps", type=int, default=50, help="DPM-Solver++ のステップ数")
@@ -86,6 +88,7 @@ def main():
     use_amp = device.type == "cuda" and not args.no_amp  # UNetのforwardだけbf16（loss・透かし計算はfp32）
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
+    LSUNfunc.limit_gpu_memory(args.max_mem_gb)
     now = datetime.datetime.now().strftime("%Y-%m-%d")
 
     resume_state = torch.load(args.resume, map_location="cpu") if args.resume else None
@@ -379,6 +382,7 @@ Learning Rate: {lr} (warmup {args.warmup_steps} steps + cosine)
 Arch         : {args.arch}
 bf16 autocast: {use_amp}
 H-flip       : {not args.no_hflip}
+GPU mem limit: {args.max_mem_gb} GiB
 CFG scale    : {guidance_scale}
 EMA decay    : {args.ema_decay}
 SORT         : {SORT}
