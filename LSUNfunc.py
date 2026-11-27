@@ -231,13 +231,14 @@ def build_fid_reference(data_dir, ref_dir=FID_REF_DIR):
     print(f"Saved {len(os.listdir(ref_dir))} FID reference images to {ref_dir}")
 
 
-def load_data(batch_size=64, data_dir="./dataset/val_256"):
+def load_data(batch_size=64, data_dir="./dataset/val_256", hflip=True):
     """
     LSUNデータセット（bedroom と cat の2クラス）をロードする
     
     Args:
         batch_size: バッチサイズ
         data_dir: bedroom と cat のフォルダが含まれる親ディレクトリのパス
+        hflip: True なら50%の確率で左右反転する（データが少ないので実質2倍に増やす）
     
     Returns:
         train_loader: DataLoader (画像とクラスラベルを返す)
@@ -245,7 +246,10 @@ def load_data(batch_size=64, data_dir="./dataset/val_256"):
     print(f"Loading LSUN data from {data_dir}...")
     
     # 学習用の変換（[-1, 1]への正規化。拡散モデルの一般的な入力形式）
-    train_transform = transforms.Compose([
+    # 左右反転: 部屋も猫も左右を入れ替えても自然な画像なので、データ拡張として使える
+    # （FID参照画像は元ファイルのコピーなので影響しない）
+    flip = [transforms.RandomHorizontalFlip(p=0.5)] if hflip else []
+    train_transform = transforms.Compose(flip + [
         transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
     ])
@@ -261,6 +265,7 @@ def load_data(batch_size=64, data_dir="./dataset/val_256"):
     
     print(f"  Classes found: {dataset.classes}")  # 例: ['bedroom', 'cat']
     print(f"  Total samples: {len(dataset)}")
+    print(f"  Horizontal flip: {hflip}")
     
     # FID計算用の参照画像フォルダ（bedroom と cat の両クラスを全て含める）
     # 旧版は先頭100枚(=全部bedroom)だけだったので、生成画像(半分cat)と比較できていなかった

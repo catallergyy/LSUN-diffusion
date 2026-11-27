@@ -33,6 +33,8 @@ def parse_args():
     # CFG
     p.add_argument("--cfg", type=float, default=3.0, help="guidance scale (評価・サンプル生成時)")
     p.add_argument("--cfg-dropout", type=float, default=0.1)
+    # データ拡張
+    p.add_argument("--no-hflip", action="store_true", help="左右反転のデータ拡張を使わない（2026-11-24 の実験と同じ条件）")
     # EMA
     p.add_argument("--ema-decay", type=float, default=0.9995,
                    help="EMA重みの減衰率。サンプル生成とFIDはEMA重みを使う")
@@ -104,7 +106,7 @@ def main():
     print("LSUN Diffusion Model Training (cat & bedroom)")
     print(f"  save_dir={save_dir}  epochs={num_epochs}  arch={args.arch}  lambda_={LSUNembedding.lambda_}  SORT={SORT}")
     # データとモデルの準備
-    train_loader = LSUNfunc.load_data(batch_size=args.batch_size)
+    train_loader = LSUNfunc.load_data(batch_size=args.batch_size, hflip=not args.no_hflip)
     LSUNfunc.verify_data_normalization(train_loader)
 
     model, loss_fn, optimizer, scheduler = LSUNfunc.create_model(lr, arch=args.arch)
@@ -345,6 +347,7 @@ Batch Size   : {args.batch_size}
 Learning Rate: {lr} (warmup {args.warmup_steps} steps + cosine)
 Arch         : {args.arch}
 bf16 autocast: {use_amp}
+H-flip       : {not args.no_hflip}
 CFG scale    : {guidance_scale}
 EMA decay    : {args.ema_decay}
 SORT         : {SORT}
