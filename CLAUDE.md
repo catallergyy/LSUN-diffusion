@@ -12,7 +12,7 @@ This file records how Claude understands this project and the user's instruction
    The user reviews each change on GitHub.
 2. **Explain before changing.** Propose the plan first and wait for "yes" before editing code.
 3. **Don't commit large files.** Data, images, checkpoints (`*.pt`, `*.pth`) and `*.npz` stay local (`.gitignore`).
-4. Write in simple English. Code comments in this project are in Japanese, so keep that style.
+4. **Talk to the user in Japanese** (changed 2026-11-27; before it was simple English). Code comments are in Japanese too.
 5. Current priorities:
    - **Generate clearer images** (better FID). The watermark is off (`lambda_=0`) for now.
    - **Evaluation and training take too long** (FID evaluation took about 40 h). Make them faster without breaking the research.
@@ -152,14 +152,20 @@ python3 LSUNtrain.py --help                               # all options
 | `c6c8023` | **bf16 autocast** + TF32 for training. |
 
 ✅ Tested on 2026-11-24 in the devcontainer: a 2-epoch run went through training → watermark position selection →
-checkpoints → sample grids → FID → log without errors. (A long run has not been done yet.)
+checkpoints → sample grids → FID → log without errors.
+
+### First long run: `content/runs/2026-11-24/` (v2, 600 epochs, lambda_=0, CFG 3.0)
+- Finished. **FID = 144.2** (EMA, 2000 samples, DPM-Solver++ 50 steps). Training time **35 h 54 m** (the estimate was ~22 h; cause not checked yet ❓).
+- `samples/epoch_0600.png`: bedrooms are recognizable but have strong color casts (all pink / all blue) and noisy texture.
+  Cats mostly fail (color blobs, only a few fur/face shapes).
+  The over-saturated colors suggest the CFG scale 3.0 is too high ❓.
 
 ---
 
 ## 6. Next steps (proposed, not done)
 
-1. User starts a real run: `python3 LSUNtrain.py --epochs 600` and checks `samples/` every 25 epochs.
-2. After training, find the best CFG scale by FID (e.g. 1.5 / 2 / 3 / 5) with `eval_fid.py --cfg`.
+1. ~~User starts a real run~~ → done (see above).
+2. **(Running, started 2026-11-27)** On `2026-11-24/checkpoint_ep0600.pt`, find the best CFG scale by FID (e.g. 1.5 / 2 / 3 / 5) with `eval_fid.py --cfg`.
 3. Choose the "best model" by FID or the last EMA checkpoint, not by training loss (the diffusion loss barely tells image quality).
 4. Possible further speed-ups (not tried): `torch.compile`, channels_last.
 
