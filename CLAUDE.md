@@ -57,6 +57,8 @@ GPU: NVIDIA GB10（PyTorch が「capability 12.1 > 12.0」と警告を出すが�
 python3 LSUNtrain.py --epochs 600                         # 通常の学習（lambda_=0）
 python3 LSUNtrain.py --epochs 600 --sort                  # SORT=True（勾配が最も大きい重みを選ぶ）
 python3 LSUNtrain.py --epochs 800 --resume content/runs/<日付>/checkpoint_latest.pt   # 学習の続き
+python3 LSUNtrain.py --epochs 600 --wandb                 # wandb に記録（事前にコンテナ内で wandb login）
+python3 LSUNtrain.py --epochs 600 --no-hflip              # 左右反転なし（2026-11-24 の実験と同じ条件）
 python3 eval_fid.py content/runs/<日付>/checkpoint_ep0600.pt --steps 25 --cfg 2.0     # FID だけ計算
 python3 LSUNtrain.py --help                               # 全オプション
 ```
@@ -150,6 +152,8 @@ python3 LSUNtrain.py --help                               # 全オプション
 | `a0e6a4a` | **EMA** 重み。サンプルと FID は EMA を使う。 |
 | `2e905d7` | **学習率のウォームアップ + コサイン減衰**。 |
 | `c6c8023` | 学習に **bf16 autocast** + TF32。 |
+| `80e89da` | **左右反転のデータ拡張**（デフォルトでオン、`--no-hflip` でオフ）。 |
+| （次のコミット） | **wandb**（`--wandb`）: 10 ステップごとの loss・学習率、エポックごとの平均 loss・時間、サンプル画像、最終 FID。GPU 使用率・電力は wandb が自動で記録する。`--resume` では同じ run に続けて記録する（run id をチェックポイントに保存）。プロジェクト名 `LSUN-diffusion`。 |
 
 ✅ 2026-11-24 に devcontainer でテスト済み: 2エポックの実行で、学習 → 透かし位置の選択 →
 チェックポイント → サンプル画像 → FID → ログ まで、エラーなく通った。

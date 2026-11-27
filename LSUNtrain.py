@@ -3,6 +3,7 @@
 ## 使い方:
 ##   python3 LSUNtrain.py --epochs 600
 ##   python3 LSUNtrain.py --epochs 600 --resume content/runs/2026-11-24/checkpoint_latest.pt   # 途中から再開
+##   python3 LSUNtrain.py --epochs 600 --wandb                                              # wandbに記録（事前に wandb login）
 ##   python3 LSUNtrain.py --help                                                             # 全オプション
 import argparse
 import copy
@@ -46,6 +47,10 @@ def parse_args():
     p.add_argument("--fid-samples", type=int, default=2000, help="最終FIDの生成枚数 (0でFIDなし)")
     p.add_argument("--save-dir", default=None, help="default: ./content/runs/<日付>")
     p.add_argument("--resume", default=None, help="checkpoint_latest.pt などから再開")
+    # wandb（ブラウザで loss・サンプル画像・GPU使用率を確認するため）
+    p.add_argument("--wandb", action="store_true", help="wandb に記録する（事前にコンテナ内で wandb login）")
+    p.add_argument("--wandb-project", default="LSUN-diffusion")
+    p.add_argument("--wandb-name", default=None, help="default: save_dir のフォルダ名")
     return p.parse_args()
 
 
@@ -91,6 +96,23 @@ def main():
         save_dir = args.save_dir or f"./content/runs/{now}"
     os.makedirs(save_dir, exist_ok=True)
     os.makedirs(f"{save_dir}/samples", exist_ok=True)
+
+    # wandb: --resume のときはチェックポイントに保存した run id で同じ run に続けて記録する
+    wandb_run = None
+    if args.wandb:
+        import wandb
+        wandb_run = wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_name or os.path.basename(os.path.normpath(save_dir)),
+            id=resume_state.get("wandb_id") if resume_state is not None else None,
+            resume="allow",
+            config={**vars(args), "save_dir": save_dir, "lambda_": LSUNembedding.lambda_,
+                    "wmark_m": LSUNembedding.wmark_m, "wmark_dim": LSUNembedding.wmark_dim},
+        )
+
+    def wandb_log(data, step):
+        if wandb_run is not None:
+            wandb_run.log(data, step=step)
 
     num_epochs = args.epochs
     lr = args.lr
@@ -167,6 +189,7 @@ def main():
             "guidance_scale": guidance_scale,
             "null_label": null_label,
             "args": vars(args),
+            "wandb_id": wandb_run.id if wandb_run is not None else None,
         }
 
     trainingstart_time = time.time()
@@ -235,6 +258,9 @@ def main():
                 epoch_normal_loss += normal_loss.item()
                 epoch_loss += total_loss.item()
                 current_steps += 1
+                if current_steps % 10 == 0:  # 10ステップごと（毎ステップだと記録が多すぎる）
+                    wandb_log({"train/loss": total_loss.item(), "train/normal_loss": normal_loss.item(),
+                               "train/lr": lr_scheduler.get_last_lr()[0], "epoch": epoch + 1}, current_steps)
 
                 pbar.update(1)
                 pbar.set_postfix({
@@ -278,6 +304,8 @@ def main():
         print(f"  Average normal loss {avg_normal_loss:.4f}")
         print(f"  Average wmark loss {avg_w_loss:.4f}")
         print(f"  Epoch Time: {epoch_time:.2f}s")
+        wandb_log({"epoch/avg_loss": avg_epoch_loss, "epoch/avg_normal_loss": avg_normal_loss,
+                   "epoch/avg_wmark_loss": avg_w_loss, "epoch/time_s": epoch_time, "epoch": epoch + 1}, current_steps)
 
         # ベストモデルの保存（学習lossが最小のもの）
         if avg_epoch_loss < best_loss:
@@ -301,6 +329,9 @@ def main():
             path = f"{save_dir}/samples/epoch_{epoch+1:04d}.png"
             save_samples(ema_model, scheduler, device, args, null_label, path)
             print(f"  ✓ Samples saved to {path}")
+            if wandb_run is not None:
+                wandb_log({"samples": wandb.Image(path, caption=f"epoch {epoch+1} (上: bedroom, 下: cat, CFG {args.cfg})"),
+                           "epoch": epoch + 1}, current_steps)
 
     # ========== 学習完了 ==========
     total_training_time = time.time() - trainingstart_time
@@ -372,6 +403,11 @@ Saved Path   : {model_path}
     with open(log_file_path, "a", encoding="utf-8") as f:
         f.write(log_content)
     print(f"\nTraining log saved to {log_file_path}")
+
+    if wandb_run is not None:
+        wandb_run.summary["fid"] = fid_score
+        wandb_run.summary["training_time_h"] = total_training_time / 3600
+        wandb_run.finish()
 
 
 if __name__ == "__main__":
