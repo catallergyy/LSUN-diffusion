@@ -70,6 +70,22 @@ python3 LSUNtrain.py --help                               # 全オプション
   マシンを再起動したら、ユーザーが普通のターミナルで `ssh-agent -a ~/.ssh/agent.sock` と `ssh-add ~/.ssh/id_ed25519_github` を実行する必要がある。
 - **wandb** はコンテナ内でログイン済み（エンティティ `m1m02530142-n`、プロジェクト `LSUN-diffusion`）。
 
+### 接続が切れたときのために（tmux）
+
+ユーザーは NVIDIA Sync（SSH）で接続している。SSH が切れると、その下で動いていたもの（Claude を含む）は終了する。
+（2026-11-27 06:51 に実際に起きた。原因はたぶん、長い間通信がない接続をネットワーク機器が切ったこと。自動スリープはオフだった）
+
+- **Claude は tmux の中で起動する:**
+  ```
+  tmux new -s claude        # 初回: tmux のセッションを作る
+  claude --continue         # 前の会話の続きから起動する
+  ```
+- **切れた後の再接続:** Sync で接続し直して `tmux attach -t claude`（Claude も会話もそのまま残っている）。
+- tmux から一時的に抜ける: `Ctrl+b` → `d`。セッションの一覧: `tmux ls`。
+- **数十分以上かかる処理（学習・FID）も、Claude が tmux の別セッションで起動する**（例: `tmux new -d -s cfgsweep <スクリプト>`）。
+  Claude の Bash のバックグラウンド実行だけだと、Claude が終了したときに一緒に止まる。
+- 予防: PC 側の `~/.ssh/config` に `ServerAliveInterval 60` を書く（Sync がこの設定を読むかどうかは未確認 ❓）。
+
 ---
 
 ## 5. 絶対に注意すること ⚠️
